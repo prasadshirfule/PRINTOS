@@ -202,9 +202,9 @@ export async function verifyAdminAuth(req: NextRequest): Promise<AdminAuthResult
   const token = bearerToken || cookieToken;
 
   if (!token) {
-    // Development bypass if dev key provided
+    // Development bypass only if dev key provided AND not in production
     const devKey = req.headers.get('x-admin-key');
-    if (devKey === 'dev-admin-secret') {
+    if (process.env.NODE_ENV !== 'production' && devKey === 'dev-admin-secret') {
       return {
         authorized: true,
         user: { id: 'dev-admin', email: 'admin@printos.local', role: 'admin', shopId: DEFAULT_SHOP_ID },

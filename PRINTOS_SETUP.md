@@ -83,7 +83,10 @@ PRINTOS natively supports **Multi-Shop Tenant Isolation**:
 
 The `/admin/*` portal is fully protected by Next.js middleware and signed session tokens stored in secure `httpOnly` cookies (`printos_admin_session`).
 
-### Logging In
+> [!WARNING]
+> **Default Credentials Warning**: The default credentials below are provided strictly for local development and offline testing. In any staging or production environment, `ProductionEnvValidator` will block execution if default passwords or mock secrets are detected. Always configure secure secrets in production.
+
+### Logging In (Development Mode)
 1. Start the server (`npm run dev`) and visit [http://localhost:3000/admin](http://localhost:3000/admin).
 2. Unauthenticated requests are automatically redirected to the portal login at `/admin/login`.
 3. Default credentials for local development:
@@ -94,13 +97,34 @@ The `/admin/*` portal is fully protected by Next.js middleware and signed sessio
 ### Creating Production Admin Users (Supabase Auth)
 For production deployments using Supabase:
 1. Navigate to your Supabase Dashboard ➔ **Authentication** ➔ **Users**.
-2. Click **Add User** (or `Invite User`) and create an admin account with staff email and password.
+2. Click **Add User** (or `Invite User`) and create an admin account with staff email and a strong password.
 3. To assign a specific shop to a staff member, include `"shop_id": "<shop-uuid>"` in `user_metadata`.
 4. PRINTOS automatically queries `supabase.auth.signInWithPassword` first, generating signed session cookies with the tenant's `shopId`.
 
 ---
 
-## 6. Running the Development Server
+## 6. Production Deployment Checklist & Security
+
+Before deploying PRINTOS to production (e.g. Vercel, Railway, AWS):
+
+1. **Environment Variables**:
+   - Ensure `NODE_ENV="production"` is set.
+   - `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` must point to your live Supabase instance.
+   - `ADMIN_JWT_SECRET` must be set to a high-entropy secret (min 32 characters).
+   - `ADMIN_PASSWORD` (if using local auth fallback) must NOT be `admin123`.
+   - `PRINTOS_AGENT_KEY` must be a cryptographically secure random string shared only with your local Windows Print Agent PCs.
+   - `CRON_SECRET` must be set to protect `/api/cron/*` endpoints from unauthorized triggers.
+   - Configure live Razorpay API keys (`RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`).
+
+2. **Database Migrations**:
+   - Run migrations `00001_initial_schema.sql` through `00004_multi_shop_schema.sql` in your Supabase SQL editor.
+
+3. **Uptime & Health Monitoring**:
+   - Monitor the public health check endpoint at `/api/health` using UptimeRobot, BetterStack, or Datadog. It returns HTTP 200 with repository and system telemetry.
+
+---
+
+## 7. Running the Development Server
 
 Start the Next.js application:
 ```powershell
@@ -116,7 +140,7 @@ Open your browser at:
 
 ---
 
-## 7. Running the Print Agent
+## 8. Running the Print Agent
 
 ### Production: Native Windows Print Agent
 Runs on the shop Windows PC connected to physical USB/LAN printers:
@@ -136,7 +160,7 @@ npm run agent:mock:fail
 
 ---
 
-## 8. Running Cron Maintenance Jobs
+## 9. Running Cron Maintenance Jobs
 
 PRINTOS includes automated cron endpoints protected by `CRON_SECRET`:
 
@@ -152,9 +176,9 @@ curl -X POST "http://localhost:3000/api/cron/cleanup?retentionHours=24" -H "Auth
 
 ---
 
-## 9. Running Tests & Quality Checks
+## 10. Running Tests & Quality Checks
 
-Run the full Vitest automated test suite (21 test files, 116 tests):
+Run the full Vitest automated test suite (22 test files, 117 tests):
 ```powershell
 npm test
 ```

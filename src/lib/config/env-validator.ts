@@ -7,6 +7,19 @@ export interface EnvValidationResult {
 
 export class ProductionEnvValidator {
   /**
+   * Insecure default secrets that must never be used in production
+   */
+  private static readonly INSECURE_DEFAULTS = new Set([
+    'mock-agent-secret-token',
+    'dev-agent-key-secret-123456789',
+    'printos_default_secure_auth_key_123',
+    'dev-cron-secret-123456789',
+    'admin123',
+    'password',
+    'secret',
+  ]);
+
+  /**
    * Validates required and recommended environment variables for PRINTOS
    */
   public static validate(env: Record<string, string | undefined> = process.env): EnvValidationResult {
@@ -15,7 +28,7 @@ export class ProductionEnvValidator {
     const warnings: string[] = [];
     const errors: string[] = [];
 
-    // Core Supabase persistence requirements
+    // 1. Core Supabase persistence requirements
     if (!env.NEXT_PUBLIC_SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL.includes('your-supabase-project')) {
       if (isProduction) {
         missing.push('NEXT_PUBLIC_SUPABASE_URL');
@@ -34,22 +47,48 @@ export class ProductionEnvValidator {
       }
     }
 
-    // Agent key security
-    if (!env.PRINTOS_AGENT_KEY || env.PRINTOS_AGENT_KEY === 'mock-agent-secret-token') {
+    // 2. Agent key security
+    if (!env.PRINTOS_AGENT_KEY || this.INSECURE_DEFAULTS.has(env.PRINTOS_AGENT_KEY)) {
       if (isProduction) {
         missing.push('PRINTOS_AGENT_KEY');
-        errors.push('PRINTOS_AGENT_KEY must be a secure unique secret in production, not the default mock token.');
+        errors.push('PRINTOS_AGENT_KEY must be configured with a secure unique secret (min 16 chars) in production.');
+      } else if (!env.PRINTOS_AGENT_KEY) {
+        warnings.push('PRINTOS_AGENT_KEY is not set; agent endpoints will use default test secret.');
+      }
+    } else if (isProduction && env.PRINTOS_AGENT_KEY.length < 16) {
+      errors.push('PRINTOS_AGENT_KEY is too short (must be at least 16 characters for production security).');
+    }
+
+    // 3. Admin Authentication & Session Secrets
+    const adminSecret = env.ADMIN_JWT_SECRET;
+    if (isProduction) {
+      if (!adminSecret || this.INSECURE_DEFAULTS.has(adminSecret)) {
+        errors.push('ADMIN_JWT_SECRET must be explicitly set with a high-entropy secret in production.');
+      } else if (adminSecret.length < 16) {
+        errors.push('ADMIN_JWT_SECRET is too short (must be at least 16 characters for production).');
       }
     }
 
-    // Cron endpoint security
-    if (!env.CRON_SECRET) {
+    // Check default local admin credentials
+    const adminPassword = env.ADMIN_PASSWORD;
+    if (adminPassword === 'admin123' || !adminPassword) {
       if (isProduction) {
+        errors.push('CRITICAL: Default admin password "admin123" is detected. You MUST set a secure ADMIN_PASSWORD in production.');
+      } else {
+        warnings.push('Default admin credentials active (admin@printos.local / admin123). Change before deploying to production.');
+      }
+    }
+
+    // 4. Cron endpoint security
+    if (!env.CRON_SECRET || this.INSECURE_DEFAULTS.has(env.CRON_SECRET)) {
+      if (isProduction) {
+        errors.push('CRITICAL: CRON_SECRET must be set to a secure unique token in production to protect maintenance tasks.');
+      } else {
         warnings.push('CRON_SECRET is not set; cron endpoints (/api/cron/*) will be accessible without authentication.');
       }
     }
 
-    // Razorpay payment provider checks
+    // 5. Razorpay payment provider checks
     const paymentProvider = (env.PAYMENT_PROVIDER || '').toLowerCase();
     if (paymentProvider === 'razorpay' || env.RAZORPAY_KEY_ID) {
       if (!env.RAZORPAY_KEY_ID) missing.push('RAZORPAY_KEY_ID');
@@ -57,7 +96,7 @@ export class ProductionEnvValidator {
       if (!env.RAZORPAY_WEBHOOK_SECRET) warnings.push('RAZORPAY_WEBHOOK_SECRET is recommended for verifying payment signatures.');
     }
 
-    // OpenWA provider checks
+    // 6. OpenWA provider checks
     const waProvider = (env.WHATSAPP_PROVIDER || '').toLowerCase();
     if (waProvider === 'openwa' || env.OPENWA_API_URL) {
       if (!env.OPENWA_API_URL) missing.push('OPENWA_API_URL');

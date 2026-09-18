@@ -153,7 +153,12 @@ Detailed architecture specifications, setup manuals, and testing guidelines are 
   - Full tenant isolation across orders, print jobs, hardware queues, and admin portals via `shop_id`.
   - Supabase database Row Level Security (RLS) policies and tenant-aware atomic queue claiming.
   - Multi-tenant admin authentication linking staff to specific print shop branches.
-  - 100% passing test suite (21 test suites, 116 automated tests).
+- [x] **Final Production Polish & Observability**
+  - Public system health check endpoint (`/api/health`) for uptime monitoring.
+  - Custom Next.js 404 (`not-found.tsx`) and error boundary (`error.tsx`) pages.
+  - Hardened production secret checks preventing insecure default credentials in live environments.
+  - Official MIT Open Source License.
+  - 100% passing test suite (22 test suites, 118 automated tests).
 
 ---
 
@@ -244,7 +249,7 @@ npm run agent:mock:fail
 PRINTOS includes a complete test suite covering unit calculations, concurrency invariants, and end-to-end acceptance flows:
 
 ```bash
-# Run all Vitest test suites (21 test suites, 116 tests)
+# Run all Vitest test suites (22 test suites, 118 tests)
 npm test
 
 # Run Phase 1 End-to-End Acceptance Test
