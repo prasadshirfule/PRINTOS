@@ -1,4 +1,4 @@
-﻿import { OrderStatus } from '@/types/printos';
+import { OrderStatus } from '@/types/printos';
 
 export class InvalidStateTransitionError extends Error {
   constructor(public readonly from: OrderStatus, public readonly to: OrderStatus, reason?: string) {
@@ -16,14 +16,16 @@ export class InvalidStateTransitionError extends Error {
 const VALID_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   RECEIVED: ['CONFIGURING', 'CANCELLED', 'FAILED'],
   CONFIGURING: ['AWAITING_PAYMENT', 'CANCELLED', 'FAILED'],
-  AWAITING_PAYMENT: ['PAID', 'CANCELLED', 'FAILED'],
+  AWAITING_PAYMENT: ['PAID', 'CANCELLED', 'FAILED', 'EXPIRED'],
   PAID: ['QUEUED', 'WAITING_FOR_PRINTER', 'FAILED', 'CANCELLED'],
   QUEUED: ['WAITING_FOR_PRINTER', 'PRINTING', 'FAILED', 'CANCELLED'],
   WAITING_FOR_PRINTER: ['PRINTING', 'QUEUED', 'FAILED', 'CANCELLED'],
   PRINTING: ['COMPLETED', 'FAILED'],
   COMPLETED: [], // Terminal state
-  FAILED: ['QUEUED', 'CANCELLED'], // Can be manually retried by admin
+  FAILED: ['QUEUED', 'CANCELLED', 'REFUND_PENDING'], // Can be manually retried or refunded
   CANCELLED: [], // Terminal state
+  EXPIRED: ['QUEUED', 'REFUND_PENDING', 'CANCELLED'], // Late payment resurrection or refund
+  REFUND_PENDING: ['CANCELLED', 'FAILED', 'COMPLETED'],
 };
 
 export class OrderStateMachine {

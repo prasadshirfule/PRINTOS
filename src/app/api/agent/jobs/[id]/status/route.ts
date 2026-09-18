@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getRepository, UnauthorizedAgentJobError } from '@/lib/repository';
 import { AgentJobStatusUpdate } from '@/types/printos';
+import { NotificationService } from '@/lib/whatsapp/notification-service';
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
@@ -27,6 +28,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     // Enforces agent ownership: only the claiming agent can update the job
     const updatedJob = await repo.updateJobStatus(jobId, agent.id, body);
+
+    // Dispatch WhatsApp notification to customer via transactional outbox
+    const order = await repo.getOrder(updatedJob.orderId);
+    if (order) {
+      await NotificationService.notifyOrderStatus(repo, order, body.status, body.errorMessage);
+    }
 
     return NextResponse.json({
       ok: true,

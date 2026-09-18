@@ -12,12 +12,23 @@ import {
   JobStatus,
   PrinterStatus,
 } from '@/types/printos';
+import {
+  ConversationState,
+  ConversationSessionData,
+  WhatsAppConversation,
+  WhatsAppInboxItem,
+  WhatsAppOutboxItem,
+  WhatsAppOutboxPayload,
+  WhatsAppMessage,
+  OutboxMessageType,
+} from '@/types/whatsapp';
 import { OrderStateMachine } from '@/lib/orders/state-machine';
 import {
   IPrintOSRepository,
   DashboardMetrics,
   UnauthorizedAgentJobError,
   ResourceNotFoundError,
+  StaleConversationVersionError,
 } from './repository.interface';
 
 export class SupabasePrintOSRepository implements IPrintOSRepository {
@@ -630,6 +641,539 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
       version: row.version,
       capabilities: row.capabilities || {},
       lastSeenAt: row.last_seen_at,
+      createdAt: row.created_at,
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // Phase 2: WhatsApp Conversations & Locking
+  // --------------------------------------------------------------------------
+  public async getConversation(customerPhone: string): Promise<WhatsAppConversation | null> {
+    const { data, error } = await this.supabase
+      .from('whatsapp_conversations')
+      .select('*')
+      .eq('customer_phone', customerPhone)
+      .maybeSingle();
+
+    if (error) {
+      throw new Error(`Supabase getConversation failed: ${error.message}`);
+    }
+
+    return data ? this.mapConversation(data) : null;
+  }
+
+  public async upsertConversation(
+    conversation: Partial<WhatsAppConversation> & { customerPhone: string }
+  ): Promise<WhatsAppConversation> {
+    const existing = await this.getConversation(conversation.customerPhone);
+    const now = new Date().toISOString();
+
+    if (existing) {
+      const { data, error } = await this.supabase
+        .from('whatsapp_conversations')
+        .update({
+          customer_name: conversation.customerName !== undefined ? conversation.customerName : existing.customerName,
+          current_state: conversation.currentState || existing.currentState,
+          active_order_id: conversation.activeOrderId !== undefined ? conversation.activeOrderId : existing.activeOrderId,
+          session_data: conversation.sessionData ? { ...existing.sessionData, ...conversation.sessionData } : existing.sessionData,
+          version: existing.version + 1,
+          last_interaction_at: now,
+        })
+        .eq('customer_phone', conversation.customerPhone)
+        .select()
+        .single();
+
+      if (error) {
+        throw new Error(`Supabase upsertConversation update failed: ${error.message}`);
+      }
+      return this.mapConversation(data);
+    }
+
+    const { data, error } = await this.supabase
+      .from('whatsapp_conversations')
+      .insert({
+        id: conversation.id || crypto.randomUUID(),
+        customer_phone: conversation.customerPhone,
+        customer_name: conversation.customerName || null,
+        current_state: conversation.currentState || 'IDLE',
+        active_order_id: conversation.activeOrderId || null,
+        session_data: conversation.sessionData || {},
+        version: 1,
+        last_interaction_at: now,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      throw new Error(`Supabase upsertConversation insert failed: ${error.message}`);
+    }
+    return this.mapConversation(data);
+  }
+
+  public async updateConversationState(
+    customerPhone: string,
+    nextState: ConversationState,
+    sessionData?: ConversationSessionData,
+    activeOrderId?: string | null,
+    expectedVersion?: number
+  ): Promise<WhatsAppConversation> {
+    const existing = await this.getConversation(customerPhone);
+    if (!existing) {
+      throw new ResourceNotFoundError('Conversation', customerPhone);
+    }
+
+    if (expectedVersion !== undefined && existing.version !== expectedVersion) {
+      throw new StaleConversationVersionError(customerPhone, expectedVersion);
+    }
+
+    let query = this.supabase
+      .from('whatsapp_conversations')
+      .update({
+        current_state: nextState,
+        session_data: sessionData !== undefined ? sessionData : existing.sessionData,
+        active_order_id: activeOrderId !== undefined ? activeOrderId : existing.activeOrderId,
+        version: existing.version + 1,
+        last_interaction_at: new Date().toISOString(),
+      })
+      .eq('customer_phone', customerPhone);
+
+    if (expectedVersion !== undefined) {
+      query = query.eq('version', expectedVersion);
+    }
+
+    const { data, error } = await query.select().single();
+    if (error) {
+      if (expectedVersion !== undefined) {
+        throw new StaleConversationVersionError(customerPhone, expectedVersion);
+      }
+      throw new Error(`Supabase updateConversationState failed: ${error.message}`);
+    }
+
+    return this.mapConversation(data);
+  }
+
+  // --------------------------------------------------------------------------
+  // Phase 2: WhatsApp Inbox Operations
+  // --------------------------------------------------------------------------
+  public async enqueueInboxItem(item: {
+    messageId: string;
+    senderPhone: string;
+    rawPayload: Record<string, unknown>;
+  }): Promise<{ item: WhatsAppInboxItem; isDuplicate: boolean }> {
+    const { data, error } = await this.supabase
+      .from('whatsapp_inbox')
+      .insert({
+        message_id: item.messageId,
+        sender_phone: item.senderPhone,
+        raw_payload: item.rawPayload,
+        status: 'RECEIVED',
+        attempt_count: 0,
+        max_attempts: 5,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === '23505') {
+        const { data: existing } = await this.supabase
+          .from('whatsapp_inbox')
+          .select('*')
+          .eq('message_id', item.messageId)
+          .single();
+        if (existing) {
+          return { item: this.mapInboxItem(existing), isDuplicate: true };
+        }
+      }
+      throw new Error(`Supabase enqueueInboxItem failed: ${error.message}`);
+    }
+
+    return { item: this.mapInboxItem(data), isDuplicate: false };
+  }
+
+  public async claimInboxBatch(
+    workerId: string,
+    limit = 10,
+    leaseSeconds = 120
+  ): Promise<WhatsAppInboxItem[]> {
+    const nowIso = new Date().toISOString();
+    const lockedUntil = new Date(Date.now() + leaseSeconds * 1000).toISOString();
+
+    const { data: eligible, error: fetchError } = await this.supabase
+      .from('whatsapp_inbox')
+      .select('*')
+      .or(`status.in.(RECEIVED,RETRYABLE),and(status.eq.PROCESSING,locked_until.lt.${nowIso})`)
+      .order('received_at', { ascending: true })
+      .limit(limit);
+
+    if (fetchError || !eligible || eligible.length === 0) {
+      return [];
+    }
+
+    const claimed: WhatsAppInboxItem[] = [];
+    for (const row of eligible) {
+      const { data: updated, error: updateError } = await this.supabase
+        .from('whatsapp_inbox')
+        .update({
+          status: 'PROCESSING',
+          worker_id: workerId,
+          processing_started_at: nowIso,
+          locked_until: lockedUntil,
+        })
+        .eq('id', row.id)
+        .select()
+        .single();
+
+      if (!updateError && updated) {
+        claimed.push(this.mapInboxItem(updated));
+      }
+    }
+
+    return claimed;
+  }
+
+  public async renewInboxLease(id: string, workerId: string, additionalSeconds = 120): Promise<boolean> {
+    const nowIso = new Date().toISOString();
+    const lockedUntil = new Date(Date.now() + additionalSeconds * 1000).toISOString();
+
+    const { data, error } = await this.supabase
+      .from('whatsapp_inbox')
+      .update({ locked_until: lockedUntil })
+      .eq('id', id)
+      .eq('worker_id', workerId)
+      .gte('locked_until', nowIso)
+      .select();
+
+    return !error && data && data.length > 0;
+  }
+
+  public async completeInboxItem(id: string, workerId: string): Promise<boolean> {
+    const nowIso = new Date().toISOString();
+    const { data, error } = await this.supabase
+      .from('whatsapp_inbox')
+      .update({
+        status: 'PROCESSED',
+        processed_at: nowIso,
+        locked_until: null,
+      })
+      .eq('id', id)
+      .eq('worker_id', workerId)
+      .select();
+
+    return !error && data && data.length > 0;
+  }
+
+  public async failInboxItem(
+    id: string,
+    workerId: string,
+    errorMsg: string,
+    retryable = true
+  ): Promise<boolean> {
+    const { data: current } = await this.supabase
+      .from('whatsapp_inbox')
+      .select('attempt_count, max_attempts')
+      .eq('id', id)
+      .eq('worker_id', workerId)
+      .single();
+
+    if (!current) return false;
+
+    const nextAttempt = current.attempt_count + 1;
+    const nextStatus = !retryable || nextAttempt >= current.max_attempts ? 'DEAD_LETTER' : 'RETRYABLE';
+
+    const { data, error } = await this.supabase
+      .from('whatsapp_inbox')
+      .update({
+        status: nextStatus,
+        attempt_count: nextAttempt,
+        last_error: errorMsg,
+        locked_until: null,
+      })
+      .eq('id', id)
+      .eq('worker_id', workerId)
+      .select();
+
+    return !error && data && data.length > 0;
+  }
+
+  // --------------------------------------------------------------------------
+  // Phase 2: WhatsApp Outbox Operations
+  // --------------------------------------------------------------------------
+  public async enqueueOutboxItem(item: {
+    conversationId?: string | null;
+    orderId?: string | null;
+    recipientPhone: string;
+    messageType: OutboxMessageType;
+    payload: WhatsAppOutboxPayload;
+  }): Promise<WhatsAppOutboxItem> {
+    const { data, error } = await this.supabase
+      .from('whatsapp_outbox')
+      .insert({
+        conversation_id: item.conversationId || null,
+        order_id: item.orderId || null,
+        recipient_phone: item.recipientPhone,
+        message_type: item.messageType,
+        payload: item.payload,
+        status: 'PENDING',
+        attempt_count: 0,
+        max_attempts: 5,
+        next_attempt_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
+
+    if (error) {
+      throw new Error(`Supabase enqueueOutboxItem failed: ${error.message}`);
+    }
+
+    return this.mapOutboxItem(data);
+  }
+
+  public async claimOutboxBatch(
+    workerId: string,
+    limit = 10,
+    leaseSeconds = 120
+  ): Promise<WhatsAppOutboxItem[]> {
+    const nowIso = new Date().toISOString();
+    const lockedUntil = new Date(Date.now() + leaseSeconds * 1000).toISOString();
+
+    const { data: eligible, error: fetchError } = await this.supabase
+      .from('whatsapp_outbox')
+      .select('*')
+      .or(`and(status.in.(PENDING,FAILED),next_attempt_at.lte.${nowIso}),and(status.eq.SENDING,locked_until.lt.${nowIso})`)
+      .order('next_attempt_at', { ascending: true })
+      .limit(limit);
+
+    if (fetchError || !eligible || eligible.length === 0) {
+      return [];
+    }
+
+    const claimed: WhatsAppOutboxItem[] = [];
+    for (const row of eligible) {
+      const { data: updated, error: updateError } = await this.supabase
+        .from('whatsapp_outbox')
+        .update({
+          status: 'SENDING',
+          worker_id: workerId,
+          locked_until: lockedUntil,
+        })
+        .eq('id', row.id)
+        .select()
+        .single();
+
+      if (!updateError && updated) {
+        claimed.push(this.mapOutboxItem(updated));
+      }
+    }
+
+    return claimed;
+  }
+
+  public async renewOutboxLease(id: string, workerId: string, additionalSeconds = 120): Promise<boolean> {
+    const nowIso = new Date().toISOString();
+    const lockedUntil = new Date(Date.now() + additionalSeconds * 1000).toISOString();
+
+    const { data, error } = await this.supabase
+      .from('whatsapp_outbox')
+      .update({ locked_until: lockedUntil })
+      .eq('id', id)
+      .eq('worker_id', workerId)
+      .gte('locked_until', nowIso)
+      .select();
+
+    return !error && data && data.length > 0;
+  }
+
+  public async completeOutboxItem(
+    id: string,
+    workerId: string,
+    providerMessageId?: string
+  ): Promise<boolean> {
+    const nowIso = new Date().toISOString();
+    const { data, error } = await this.supabase
+      .from('whatsapp_outbox')
+      .update({
+        status: 'SENT',
+        sent_at: nowIso,
+        provider_message_id: providerMessageId || null,
+        locked_until: null,
+      })
+      .eq('id', id)
+      .eq('worker_id', workerId)
+      .select();
+
+    return !error && data && data.length > 0;
+  }
+
+  public async failOutboxItem(id: string, workerId: string, errorMsg: string): Promise<boolean> {
+    const { data: current } = await this.supabase
+      .from('whatsapp_outbox')
+      .select('attempt_count, max_attempts')
+      .eq('id', id)
+      .eq('worker_id', workerId)
+      .single();
+
+    if (!current) return false;
+
+    const nextAttempt = current.attempt_count + 1;
+    let nextStatus = 'FAILED';
+    let nextAttemptAt = new Date().toISOString();
+
+    if (nextAttempt >= current.max_attempts) {
+      nextStatus = 'DEAD_LETTER';
+    } else {
+      const delayMs = Math.pow(2, nextAttempt) * 2000;
+      nextAttemptAt = new Date(Date.now() + delayMs).toISOString();
+    }
+
+    const { data, error } = await this.supabase
+      .from('whatsapp_outbox')
+      .update({
+        status: nextStatus,
+        attempt_count: nextAttempt,
+        next_attempt_at: nextAttemptAt,
+        last_error: errorMsg,
+        locked_until: null,
+      })
+      .eq('id', id)
+      .eq('worker_id', workerId)
+      .select();
+
+    return !error && data && data.length > 0;
+  }
+
+  // --------------------------------------------------------------------------
+  // Phase 2: Message Audit Trail & Documents
+  // --------------------------------------------------------------------------
+  public async recordWhatsAppMessage(message: {
+    conversationId: string;
+    messageId: string;
+    direction: 'INBOUND' | 'OUTBOUND';
+    messageType: string;
+    body?: string | null;
+    mediaUrl?: string | null;
+    mediaMimeType?: string | null;
+    rawPayload?: Record<string, unknown>;
+  }): Promise<WhatsAppMessage> {
+    const { data, error } = await this.supabase
+      .from('whatsapp_messages')
+      .insert({
+        conversation_id: message.conversationId,
+        message_id: message.messageId,
+        direction: message.direction,
+        message_type: message.messageType,
+        body: message.body || null,
+        media_url: message.mediaUrl || null,
+        media_mime_type: message.mediaMimeType || null,
+        raw_payload: message.rawPayload || {},
+      })
+      .select()
+      .single();
+
+    if (error) {
+      throw new Error(`Supabase recordWhatsAppMessage failed: ${error.message}`);
+    }
+
+    return this.mapWhatsAppMessage(data);
+  }
+
+  public async listWhatsAppMessages(conversationId: string, limit = 50): Promise<WhatsAppMessage[]> {
+    const { data, error } = await this.supabase
+      .from('whatsapp_messages')
+      .select('*')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: true })
+      .limit(limit);
+
+    if (error) {
+      throw new Error(`Supabase listWhatsAppMessages failed: ${error.message}`);
+    }
+
+    return (data || []).map((row) => this.mapWhatsAppMessage(row));
+  }
+
+  public async verifyDocumentExists(storagePath: string): Promise<boolean> {
+    if (!storagePath) return false;
+    try {
+      const parts = storagePath.split('/');
+      const folder = parts.slice(0, -1).join('/');
+      const filename = parts[parts.length - 1];
+      const { data, error } = await this.supabase.storage
+        .from('print-documents')
+        .list(folder, { search: filename, limit: 1 });
+      return !error && data && data.length > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Phase 2: Mappers
+  // --------------------------------------------------------------------------
+  private mapConversation(row: any): WhatsAppConversation {
+    return {
+      id: row.id,
+      customerPhone: row.customer_phone,
+      customerName: row.customer_name,
+      currentState: row.current_state,
+      activeOrderId: row.active_order_id,
+      sessionData: row.session_data || {},
+      version: row.version || 1,
+      lastInteractionAt: row.last_interaction_at,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  private mapInboxItem(row: any): WhatsAppInboxItem {
+    return {
+      id: row.id,
+      messageId: row.message_id,
+      senderPhone: row.sender_phone,
+      rawPayload: row.raw_payload || {},
+      status: row.status,
+      workerId: row.worker_id,
+      lockedUntil: row.locked_until,
+      processingStartedAt: row.processing_started_at,
+      attemptCount: row.attempt_count || 0,
+      maxAttempts: row.max_attempts || 5,
+      lastError: row.last_error,
+      receivedAt: row.received_at,
+      processedAt: row.processed_at,
+    };
+  }
+
+  private mapOutboxItem(row: any): WhatsAppOutboxItem {
+    return {
+      id: row.id,
+      conversationId: row.conversation_id,
+      orderId: row.order_id,
+      recipientPhone: row.recipient_phone,
+      messageType: row.message_type,
+      payload: row.payload || {},
+      status: row.status,
+      workerId: row.worker_id,
+      lockedUntil: row.locked_until,
+      attemptCount: row.attempt_count || 0,
+      maxAttempts: row.max_attempts || 5,
+      nextAttemptAt: row.next_attempt_at,
+      providerMessageId: row.provider_message_id,
+      lastError: row.last_error,
+      createdAt: row.created_at,
+      sentAt: row.sent_at,
+    };
+  }
+
+  private mapWhatsAppMessage(row: any): WhatsAppMessage {
+    return {
+      id: row.id,
+      conversationId: row.conversation_id,
+      messageId: row.message_id,
+      direction: row.direction,
+      messageType: row.message_type,
+      body: row.body,
+      mediaUrl: row.media_url,
+      mediaMimeType: row.media_mime_type,
+      rawPayload: row.raw_payload || {},
       createdAt: row.created_at,
     };
   }

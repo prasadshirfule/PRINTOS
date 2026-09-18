@@ -1,21 +1,29 @@
-﻿export interface PaymentOrderResult {
+export interface PaymentIntentResult {
   paymentId: string;
   amountPaisa: number;
   currency: string;
   paymentUrl?: string;
-  upiQrString?: string;
+  qrPayload?: string;
+  expiresAt: string;
 }
 
-export interface PaymentVerificationResult {
-  verified: boolean;
+export interface PaymentWebhookVerification {
+  isValid: boolean;
   orderId: string;
   transactionId: string;
+  provider: string;
   amountPaisa: number;
-  status: 'SUCCESS' | 'FAILED' | 'PENDING';
+  status: 'SUCCESS' | 'FAILED';
+  rawPayload: Record<string, unknown>;
+}
+
+export interface FulfillabilityAssessment {
+  fulfillable: boolean;
+  reason?: 'HARDWARE_OFFLINE' | 'CAPABILITY_MISMATCH' | 'FILE_EXPIRED' | 'SHOP_CLOSED_HARD' | 'OK';
 }
 
 export interface IPaymentProvider {
-  createPaymentOrder(orderId: string, amountPaisa: number, customerPhone: string): Promise<PaymentOrderResult>;
-  verifyPayment(paymentId: string): Promise<PaymentVerificationResult>;
-  processWebhook(headers: Record<string, string>, rawBody: string): Promise<PaymentVerificationResult>;
+  createPaymentIntent(orderId: string, amountPaisa: number, customerPhone: string): Promise<PaymentIntentResult>;
+  verifyWebhook(headers: Record<string, string>, rawBody: string): Promise<PaymentWebhookVerification>;
+  getPaymentStatus(paymentId: string): Promise<'PENDING' | 'SUCCESS' | 'FAILED'>;
 }

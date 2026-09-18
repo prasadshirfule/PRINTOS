@@ -11,12 +11,23 @@ import {
   JobStatus,
   PrinterStatus,
 } from '@/types/printos';
+import {
+  ConversationState,
+  ConversationSessionData,
+  WhatsAppConversation,
+  WhatsAppInboxItem,
+  WhatsAppOutboxItem,
+  WhatsAppOutboxPayload,
+  WhatsAppMessage,
+  OutboxMessageType,
+} from '@/types/whatsapp';
 import { OrderStateMachine } from '@/lib/orders/state-machine';
 import {
   IPrintOSRepository,
   DashboardMetrics,
   UnauthorizedAgentJobError,
   ResourceNotFoundError,
+  StaleConversationVersionError,
 } from './repository.interface';
 
 export class InMemoryPrintOSRepository implements IPrintOSRepository {
@@ -26,6 +37,11 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
   private printers: Map<string, Printer> = new Map();
   private agents: Map<string, PrintAgent> = new Map();
   private transactions: Set<string> = new Set();
+  private conversations: Map<string, WhatsAppConversation> = new Map();
+  private inbox: Map<string, WhatsAppInboxItem> = new Map();
+  private outbox: Map<string, WhatsAppOutboxItem> = new Map();
+  private whatsappMessages: WhatsAppMessage[] = [];
+  private storedDocuments: Set<string> = new Set();
   private claimLock = false;
 
   constructor() {
@@ -441,11 +457,386 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
     };
   }
 
+  // --------------------------------------------------------------------------
+  // Phase 2: WhatsApp Conversations & Locking
+  // --------------------------------------------------------------------------
+  public async getConversation(customerPhone: string): Promise<WhatsAppConversation | null> {
+    return this.conversations.get(customerPhone) || null;
+  }
+
+  public async upsertConversation(
+    conversation: Partial<WhatsAppConversation> & { customerPhone: string }
+  ): Promise<WhatsAppConversation> {
+    const existing = this.conversations.get(conversation.customerPhone);
+    const now = new Date().toISOString();
+
+    if (existing) {
+      const updated: WhatsAppConversation = {
+        ...existing,
+        customerName: conversation.customerName !== undefined ? conversation.customerName : existing.customerName,
+        currentState: conversation.currentState || existing.currentState,
+        activeOrderId: conversation.activeOrderId !== undefined ? conversation.activeOrderId : existing.activeOrderId,
+        sessionData: conversation.sessionData ? { ...existing.sessionData, ...conversation.sessionData } : existing.sessionData,
+        version: existing.version + 1,
+        lastInteractionAt: now,
+        updatedAt: now,
+      };
+      this.conversations.set(conversation.customerPhone, updated);
+      return updated;
+    }
+
+    const created: WhatsAppConversation = {
+      id: conversation.id || crypto.randomUUID(),
+      customerPhone: conversation.customerPhone,
+      customerName: conversation.customerName || null,
+      currentState: conversation.currentState || 'IDLE',
+      activeOrderId: conversation.activeOrderId || null,
+      sessionData: conversation.sessionData || {},
+      version: 1,
+      lastInteractionAt: now,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.conversations.set(conversation.customerPhone, created);
+    return created;
+  }
+
+  public async updateConversationState(
+    customerPhone: string,
+    nextState: ConversationState,
+    sessionData?: ConversationSessionData,
+    activeOrderId?: string | null,
+    expectedVersion?: number
+  ): Promise<WhatsAppConversation> {
+    const conversation = this.conversations.get(customerPhone);
+    if (!conversation) {
+      throw new ResourceNotFoundError('Conversation', customerPhone);
+    }
+
+    if (expectedVersion !== undefined && conversation.version !== expectedVersion) {
+      throw new StaleConversationVersionError(customerPhone, expectedVersion);
+    }
+
+    const now = new Date().toISOString();
+    const updated: WhatsAppConversation = {
+      ...conversation,
+      currentState: nextState,
+      sessionData: sessionData !== undefined ? sessionData : conversation.sessionData,
+      activeOrderId: activeOrderId !== undefined ? activeOrderId : conversation.activeOrderId,
+      version: conversation.version + 1,
+      lastInteractionAt: now,
+      updatedAt: now,
+    };
+
+    this.conversations.set(customerPhone, updated);
+    return updated;
+  }
+
+  // --------------------------------------------------------------------------
+  // Phase 2: WhatsApp Inbox Operations
+  // --------------------------------------------------------------------------
+  public async enqueueInboxItem(item: {
+    messageId: string;
+    senderPhone: string;
+    rawPayload: Record<string, unknown>;
+  }): Promise<{ item: WhatsAppInboxItem; isDuplicate: boolean }> {
+    for (const existing of this.inbox.values()) {
+      if (existing.messageId === item.messageId) {
+        return { item: existing, isDuplicate: true };
+      }
+    }
+
+    const now = new Date().toISOString();
+    const inboxItem: WhatsAppInboxItem = {
+      id: crypto.randomUUID(),
+      messageId: item.messageId,
+      senderPhone: item.senderPhone,
+      rawPayload: item.rawPayload,
+      status: 'RECEIVED',
+      workerId: null,
+      lockedUntil: null,
+      processingStartedAt: null,
+      attemptCount: 0,
+      maxAttempts: 5,
+      lastError: null,
+      receivedAt: now,
+      processedAt: null,
+    };
+
+    this.inbox.set(inboxItem.id, inboxItem);
+    return { item: inboxItem, isDuplicate: false };
+  }
+
+  public async claimInboxBatch(
+    workerId: string,
+    limit = 10,
+    leaseSeconds = 120
+  ): Promise<WhatsAppInboxItem[]> {
+    const nowTime = Date.now();
+    const claimed: WhatsAppInboxItem[] = [];
+
+    const eligible = Array.from(this.inbox.values())
+      .filter((i) => {
+        if (i.status === 'RECEIVED' || i.status === 'RETRYABLE') return true;
+        if (i.status === 'PROCESSING' && i.lockedUntil && new Date(i.lockedUntil).getTime() < nowTime) {
+          return true; // Expired lease
+        }
+        return false;
+      })
+      .sort((a, b) => new Date(a.receivedAt).getTime() - new Date(b.receivedAt).getTime())
+      .slice(0, limit);
+
+    for (const item of eligible) {
+      const lockedUntil = new Date(nowTime + leaseSeconds * 1000).toISOString();
+      const updated: WhatsAppInboxItem = {
+        ...item,
+        status: 'PROCESSING',
+        workerId,
+        processingStartedAt: new Date(nowTime).toISOString(),
+        lockedUntil,
+      };
+      this.inbox.set(item.id, updated);
+      claimed.push(updated);
+    }
+
+    return claimed;
+  }
+
+  public async renewInboxLease(id: string, workerId: string, additionalSeconds = 120): Promise<boolean> {
+    const item = this.inbox.get(id);
+    if (!item) return false;
+    const nowTime = Date.now();
+
+    // Verify ownership and unexpired lease
+    if (item.workerId !== workerId || !item.lockedUntil || new Date(item.lockedUntil).getTime() < nowTime) {
+      return false;
+    }
+
+    item.lockedUntil = new Date(nowTime + additionalSeconds * 1000).toISOString();
+    this.inbox.set(id, item);
+    return true;
+  }
+
+  public async completeInboxItem(id: string, workerId: string): Promise<boolean> {
+    const item = this.inbox.get(id);
+    if (!item) return false;
+    const nowTime = Date.now();
+
+    // Verify worker ownership and valid lease
+    if (item.workerId !== workerId || (item.lockedUntil && new Date(item.lockedUntil).getTime() < nowTime)) {
+      return false;
+    }
+
+    item.status = 'PROCESSED';
+    item.processedAt = new Date().toISOString();
+    item.lockedUntil = null;
+    this.inbox.set(id, item);
+    return true;
+  }
+
+  public async failInboxItem(
+    id: string,
+    workerId: string,
+    error: string,
+    retryable = true
+  ): Promise<boolean> {
+    const item = this.inbox.get(id);
+    if (!item) return false;
+
+    if (item.workerId !== workerId) return false;
+
+    item.attemptCount += 1;
+    item.lastError = error;
+    item.lockedUntil = null;
+
+    if (!retryable || item.attemptCount >= item.maxAttempts) {
+      item.status = 'DEAD_LETTER';
+    } else {
+      item.status = 'RETRYABLE';
+    }
+
+    this.inbox.set(id, item);
+    return true;
+  }
+
+  // --------------------------------------------------------------------------
+  // Phase 2: WhatsApp Outbox Operations
+  // --------------------------------------------------------------------------
+  public async enqueueOutboxItem(item: {
+    conversationId?: string | null;
+    orderId?: string | null;
+    recipientPhone: string;
+    messageType: OutboxMessageType;
+    payload: WhatsAppOutboxPayload;
+  }): Promise<WhatsAppOutboxItem> {
+    const now = new Date().toISOString();
+    const outboxItem: WhatsAppOutboxItem = {
+      id: crypto.randomUUID(),
+      conversationId: item.conversationId || null,
+      orderId: item.orderId || null,
+      recipientPhone: item.recipientPhone,
+      messageType: item.messageType,
+      payload: item.payload,
+      status: 'PENDING',
+      workerId: null,
+      lockedUntil: null,
+      attemptCount: 0,
+      maxAttempts: 5,
+      nextAttemptAt: now,
+      providerMessageId: null,
+      lastError: null,
+      createdAt: now,
+      sentAt: null,
+    };
+
+    this.outbox.set(outboxItem.id, outboxItem);
+    return outboxItem;
+  }
+
+  public async claimOutboxBatch(
+    workerId: string,
+    limit = 10,
+    leaseSeconds = 120
+  ): Promise<WhatsAppOutboxItem[]> {
+    const nowTime = Date.now();
+    const claimed: WhatsAppOutboxItem[] = [];
+
+    const eligible = Array.from(this.outbox.values())
+      .filter((o) => {
+        if ((o.status === 'PENDING' || o.status === 'FAILED') && new Date(o.nextAttemptAt).getTime() <= nowTime) {
+          return true;
+        }
+        if (o.status === 'SENDING' && o.lockedUntil && new Date(o.lockedUntil).getTime() < nowTime) {
+          return true; // Expired lease
+        }
+        return false;
+      })
+      .sort((a, b) => new Date(a.nextAttemptAt).getTime() - new Date(b.nextAttemptAt).getTime())
+      .slice(0, limit);
+
+    for (const item of eligible) {
+      const lockedUntil = new Date(nowTime + leaseSeconds * 1000).toISOString();
+      const updated: WhatsAppOutboxItem = {
+        ...item,
+        status: 'SENDING',
+        workerId,
+        lockedUntil,
+      };
+      this.outbox.set(item.id, updated);
+      claimed.push(updated);
+    }
+
+    return claimed;
+  }
+
+  public async renewOutboxLease(id: string, workerId: string, additionalSeconds = 120): Promise<boolean> {
+    const item = this.outbox.get(id);
+    if (!item) return false;
+    const nowTime = Date.now();
+
+    if (item.workerId !== workerId || !item.lockedUntil || new Date(item.lockedUntil).getTime() < nowTime) {
+      return false;
+    }
+
+    item.lockedUntil = new Date(nowTime + additionalSeconds * 1000).toISOString();
+    this.outbox.set(id, item);
+    return true;
+  }
+
+  public async completeOutboxItem(
+    id: string,
+    workerId: string,
+    providerMessageId?: string
+  ): Promise<boolean> {
+    const item = this.outbox.get(id);
+    if (!item) return false;
+    const nowTime = Date.now();
+
+    if (item.workerId !== workerId || (item.lockedUntil && new Date(item.lockedUntil).getTime() < nowTime)) {
+      return false;
+    }
+
+    item.status = 'SENT';
+    item.sentAt = new Date().toISOString();
+    item.providerMessageId = providerMessageId || null;
+    item.lockedUntil = null;
+    this.outbox.set(id, item);
+    return true;
+  }
+
+  public async failOutboxItem(id: string, workerId: string, error: string): Promise<boolean> {
+    const item = this.outbox.get(id);
+    if (!item) return false;
+
+    if (item.workerId !== workerId) return false;
+
+    item.attemptCount += 1;
+    item.lastError = error;
+    item.lockedUntil = null;
+
+    if (item.attemptCount >= item.maxAttempts) {
+      item.status = 'DEAD_LETTER';
+    } else {
+      item.status = 'FAILED';
+      // Exponential backoff
+      const delayMs = Math.pow(2, item.attemptCount) * 2000;
+      item.nextAttemptAt = new Date(Date.now() + delayMs).toISOString();
+    }
+
+    this.outbox.set(id, item);
+    return true;
+  }
+
+  // --------------------------------------------------------------------------
+  // Phase 2: Message Audit Trail & Documents
+  // --------------------------------------------------------------------------
+  public async recordWhatsAppMessage(message: {
+    conversationId: string;
+    messageId: string;
+    direction: 'INBOUND' | 'OUTBOUND';
+    messageType: string;
+    body?: string | null;
+    mediaUrl?: string | null;
+    mediaMimeType?: string | null;
+    rawPayload?: Record<string, unknown>;
+  }): Promise<WhatsAppMessage> {
+    const created: WhatsAppMessage = {
+      id: crypto.randomUUID(),
+      conversationId: message.conversationId,
+      messageId: message.messageId,
+      direction: message.direction,
+      messageType: message.messageType,
+      body: message.body || null,
+      mediaUrl: message.mediaUrl || null,
+      mediaMimeType: message.mediaMimeType || null,
+      rawPayload: message.rawPayload || {},
+      createdAt: new Date().toISOString(),
+    };
+
+    this.whatsappMessages.push(created);
+    return created;
+  }
+
+  public async listWhatsAppMessages(conversationId: string, limit = 50): Promise<WhatsAppMessage[]> {
+    return this.whatsappMessages
+      .filter((m) => m.conversationId === conversationId)
+      .slice(-limit);
+  }
+
+  public async verifyDocumentExists(storagePath: string): Promise<boolean> {
+    return storagePath ? true : false;
+  }
+
   public async clear(): Promise<void> {
     this.orders.clear();
     this.jobs.clear();
     this.events = [];
     this.transactions.clear();
+    this.conversations.clear();
+    this.inbox.clear();
+    this.outbox.clear();
+    this.whatsappMessages = [];
+    this.storedDocuments.clear();
     this.seedDefaults();
   }
 }

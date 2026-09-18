@@ -9,10 +9,11 @@
     "lint": "next lint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:integration": "cross-env SUPABASE_INTEGRATION_TEST=true vitest run tests/supabase-integration.test.ts",
+    "test:integration": "cross-env SUPABASE_INTEGRATION_TEST=true vitest run tests/supabase-integration.test.ts tests/supabase-whatsapp-integration.test.ts",
     "agent:mock": "tsx src/agent/mock-agent.ts",
     "agent:mock:fail": "cross-env PRINT_AGENT_MOCK_FAILURE=true tsx src/agent/mock-agent.ts",
-    "acceptance:phase1": "tsx scripts/phase1-acceptance-test.ts"
+    "acceptance:phase1": "tsx scripts/phase1-acceptance-test.ts",
+    "acceptance:phase2": "tsx scripts/phase2-acceptance-test.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.3.0",

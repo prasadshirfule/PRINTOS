@@ -1,4 +1,4 @@
-﻿export type OrderStatus =
+export type OrderStatus =
   | 'RECEIVED'
   | 'CONFIGURING'
   | 'AWAITING_PAYMENT'
@@ -8,7 +8,9 @@
   | 'PRINTING'
   | 'COMPLETED'
   | 'FAILED'
-  | 'CANCELLED';
+  | 'CANCELLED'
+  | 'EXPIRED'
+  | 'REFUND_PENDING';
 
 export type JobStatus =
   | 'QUEUED'
