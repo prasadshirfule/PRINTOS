@@ -1,10 +1,17 @@
-﻿import { NextRequest, NextResponse } from 'next/server';
-import { globalStore } from '@/lib/db/store';
+import { NextRequest, NextResponse } from 'next/server';
+import { getRepository } from '@/lib/repository';
 import { calculatePrintOrderPrice } from '@/lib/pricing/pricing-engine';
 import { PrintOrder, PaperSize, ColorMode, PrintSides, FileType } from '@/types/printos';
+import { verifyAdminAuth } from '@/lib/auth/admin-auth';
 
-export async function GET() {
-  const orders = globalStore.listOrders();
+export async function GET(req: NextRequest) {
+  const auth = await verifyAdminAuth(req);
+  if (!auth.authorized) {
+    return NextResponse.json({ error: auth.error || 'Unauthorized' }, { status: 401 });
+  }
+
+  const repo = getRepository();
+  const orders = await repo.listOrders();
   return NextResponse.json({ orders });
 }
 
@@ -29,7 +36,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'customerPhone is required' }, { status: 400 });
     }
 
-    // Calculate deterministic price
+    // Deterministic price calculation strictly enforced server-side
     const priceBreakdown = calculatePrintOrderPrice({
       paperSize: paperSize as PaperSize,
       colorMode: colorMode as ColorMode,
@@ -39,6 +46,7 @@ export async function POST(req: NextRequest) {
       pageSelection,
     });
 
+    const repo = getRepository();
     const orderId = crypto.randomUUID();
     const orderNumber = `P${Math.floor(1000 + Math.random() * 9000)}`;
 
@@ -67,11 +75,11 @@ export async function POST(req: NextRequest) {
       createdAt: new Date().toISOString(),
     };
 
-    globalStore.createOrder(order);
-    globalStore.recordEvent(order.id, 'OPTIONS_SELECTED', 'Customer configured print options', {
+    await repo.createOrder(order);
+    await repo.recordOrderEvent(order.id, 'OPTIONS_SELECTED', 'Customer configured print options', {
       ...priceBreakdown,
     });
-    globalStore.recordEvent(order.id, 'PRICE_CALCULATED', `Total price: ${priceBreakdown.totalAmountFormatted}`, {
+    await repo.recordOrderEvent(order.id, 'PRICE_CALCULATED', `Total price: ${priceBreakdown.totalAmountFormatted}`, {
       totalAmountPaisa: priceBreakdown.totalAmountPaisa,
     });
 

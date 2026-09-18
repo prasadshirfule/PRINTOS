@@ -1,5 +1,5 @@
-﻿import { NextRequest, NextResponse } from 'next/server';
-import { globalStore } from '@/lib/db/store';
+import { NextRequest, NextResponse } from 'next/server';
+import { getRepository } from '@/lib/repository';
 
 export async function POST(req: NextRequest) {
   try {
@@ -8,7 +8,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Missing agent authentication token' }, { status: 401 });
     }
 
-    const agent = globalStore.authenticateAgent(apiKey);
+    const repo = getRepository();
+    const agent = await repo.authenticateAgent(apiKey);
     if (!agent) {
       return NextResponse.json({ error: 'Invalid agent token' }, { status: 403 });
     }
@@ -21,7 +22,8 @@ export async function POST(req: NextRequest) {
       // Empty body is acceptable
     }
 
-    const claimedJob = await globalStore.claimNextPrintJob(agent.id, printerId);
+    // Atomic claim through repository (PostgreSQL RPC in production)
+    const claimedJob = await repo.claimNextPrintJob(agent.id, printerId);
 
     return NextResponse.json({
       ok: true,

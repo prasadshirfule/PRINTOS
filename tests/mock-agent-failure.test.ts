@@ -1,10 +1,14 @@
-﻿import { describe, it, expect, beforeEach } from 'vitest';
-import { globalStore } from '@/lib/db/store';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { getRepository } from '@/lib/repository';
 import { PrintOrder } from '@/types/printos';
 
 describe('Mock Print Agent Failure & Retry Simulation', () => {
-  beforeEach(() => {
-    globalStore.clear();
+  const repo = getRepository();
+
+  beforeEach(async () => {
+    if (repo.clear) {
+      await repo.clear();
+    }
   });
 
   it('simulates hardware failure through the Mock Agent and verifies controlled retry limit', async () => {
@@ -31,34 +35,35 @@ describe('Mock Print Agent Failure & Retry Simulation', () => {
       paymentStatus: 'PENDING',
       createdAt: new Date().toISOString(),
     };
-    globalStore.createOrder(order);
-    const { job } = globalStore.simulateVerifiedPayment(orderId, 'tx_fail_001');
+    await repo.createOrder(order);
+    const { job } = await repo.simulateVerifiedPayment(orderId, 'tx_fail_001');
+    const agentId = 'mock-agent-fail';
 
     // Attempt 1: Agent claims, encounters paper jam, reports FAILED
-    const claim1 = await globalStore.claimNextPrintJob('mock-agent-fail');
+    const claim1 = await repo.claimNextPrintJob(agentId);
     expect(claim1).not.toBeNull();
-    globalStore.updateJobStatus(job.id, { status: 'FAILED', errorMessage: 'Simulated paper jam' });
+    await repo.updateJobStatus(job.id, agentId, { status: 'FAILED', errorMessage: 'Simulated paper jam' });
 
-    let currentJob = globalStore.getJob(job.id);
+    let currentJob = await repo.getJob(job.id);
     expect(currentJob?.status).toBe('RETRY_PENDING');
     expect(currentJob?.attemptCount).toBe(1);
 
     // Attempt 2: Re-claimed and fails again
-    const claim2 = await globalStore.claimNextPrintJob('mock-agent-fail');
+    const claim2 = await repo.claimNextPrintJob(agentId);
     expect(claim2).not.toBeNull();
-    globalStore.updateJobStatus(job.id, { status: 'FAILED', errorMessage: 'Simulated ink empty' });
+    await repo.updateJobStatus(job.id, agentId, { status: 'FAILED', errorMessage: 'Simulated ink empty' });
 
-    currentJob = globalStore.getJob(job.id);
+    currentJob = await repo.getJob(job.id);
     expect(currentJob?.status).toBe('RETRY_PENDING');
     expect(currentJob?.attemptCount).toBe(2);
 
     // Attempt 3: Re-claimed and fails (reaches maxAttempts = 3)
-    const claim3 = await globalStore.claimNextPrintJob('mock-agent-fail');
+    const claim3 = await repo.claimNextPrintJob(agentId);
     expect(claim3).not.toBeNull();
-    globalStore.updateJobStatus(job.id, { status: 'FAILED', errorMessage: 'Hardware spooler failure' });
+    await repo.updateJobStatus(job.id, agentId, { status: 'FAILED', errorMessage: 'Hardware spooler failure' });
 
-    currentJob = globalStore.getJob(job.id);
-    const currentOrder = globalStore.getOrder(orderId);
+    currentJob = await repo.getJob(job.id);
+    const currentOrder = await repo.getOrder(orderId);
 
     // Should now be terminal FAILED, no infinite retry
     expect(currentJob?.status).toBe('FAILED');
@@ -66,7 +71,7 @@ describe('Mock Print Agent Failure & Retry Simulation', () => {
     expect(currentOrder?.status).toBe('FAILED');
 
     // Attempt 4 should yield NO eligible jobs
-    const claim4 = await globalStore.claimNextPrintJob('mock-agent-fail');
+    const claim4 = await repo.claimNextPrintJob(agentId);
     expect(claim4).toBeNull();
   });
 });

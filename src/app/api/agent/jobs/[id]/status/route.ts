@@ -1,5 +1,5 @@
-﻿import { NextRequest, NextResponse } from 'next/server';
-import { globalStore } from '@/lib/db/store';
+import { NextRequest, NextResponse } from 'next/server';
+import { getRepository, UnauthorizedAgentJobError } from '@/lib/repository';
 import { AgentJobStatusUpdate } from '@/types/printos';
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
@@ -9,7 +9,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       return NextResponse.json({ error: 'Missing agent authentication token' }, { status: 401 });
     }
 
-    const agent = globalStore.authenticateAgent(apiKey);
+    const repo = getRepository();
+    const agent = await repo.authenticateAgent(apiKey);
     if (!agent) {
       return NextResponse.json({ error: 'Invalid agent token' }, { status: 403 });
     }
@@ -24,13 +25,17 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       );
     }
 
-    const updatedJob = globalStore.updateJobStatus(jobId, body);
+    // Enforces agent ownership: only the claiming agent can update the job
+    const updatedJob = await repo.updateJobStatus(jobId, agent.id, body);
 
     return NextResponse.json({
       ok: true,
       job: updatedJob,
     });
   } catch (err: unknown) {
+    if (err instanceof UnauthorizedAgentJobError) {
+      return NextResponse.json({ error: err.message }, { status: 403 });
+    }
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Failed to update job status' },
       { status: 500 }

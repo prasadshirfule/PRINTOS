@@ -1,6 +1,6 @@
-﻿-- ============================================================================
--- PRINTOS Database Schema Migration 00001
--- PostgreSQL / Supabase
+-- ============================================================================
+-- PRINTOS Database Schema Migration 00001: Core Production Schema
+-- Target: PostgreSQL 15+ / Supabase
 -- ============================================================================
 
 -- Enable required extensions
@@ -45,15 +45,15 @@ CREATE TABLE IF NOT EXISTS print_settings (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     shop_id UUID NULL,
     default_paper TEXT NOT NULL DEFAULT 'A4',
-    bw_price_paisa INT NOT NULL DEFAULT 200,          -- ₹2.00
-    color_price_paisa INT NOT NULL DEFAULT 1000,      -- ₹10.00
-    duplex_price_paisa INT NOT NULL DEFAULT 200,      -- ₹2.00 per sheet/side
-    a5_bw_price_paisa INT NOT NULL DEFAULT 100,       -- ₹1.00
-    a5_color_price_paisa INT NOT NULL DEFAULT 500,    -- ₹5.00
-    max_copies INT NOT NULL DEFAULT 50,
-    max_file_size_bytes BIGINT NOT NULL DEFAULT 52428800, -- 50MB
+    bw_price_paisa INT NOT NULL DEFAULT 200 CHECK (bw_price_paisa >= 0),
+    color_price_paisa INT NOT NULL DEFAULT 1000 CHECK (color_price_paisa >= 0),
+    duplex_price_paisa INT NOT NULL DEFAULT 200 CHECK (duplex_price_paisa >= 0),
+    a5_bw_price_paisa INT NOT NULL DEFAULT 100 CHECK (a5_bw_price_paisa >= 0),
+    a5_color_price_paisa INT NOT NULL DEFAULT 500 CHECK (a5_color_price_paisa >= 0),
+    max_copies INT NOT NULL DEFAULT 50 CHECK (max_copies > 0),
+    max_file_size_bytes BIGINT NOT NULL DEFAULT 52428800 CHECK (max_file_size_bytes > 0),
     allowed_file_types TEXT[] NOT NULL DEFAULT '{"pdf", "jpg", "jpeg", "png"}',
-    retention_hours INT NOT NULL DEFAULT 24,
+    retention_hours INT NOT NULL DEFAULT 24 CHECK (retention_hours > 0),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -84,17 +84,17 @@ CREATE TABLE IF NOT EXISTS print_orders (
     original_filename TEXT NOT NULL,
     storage_path TEXT NOT NULL,
     file_type TEXT NOT NULL CHECK (file_type IN ('pdf', 'jpg', 'jpeg', 'png')),
-    file_size BIGINT NOT NULL,
-    page_count INT NOT NULL DEFAULT 1,
+    file_size BIGINT NOT NULL CHECK (file_size > 0),
+    page_count INT NOT NULL DEFAULT 1 CHECK (page_count > 0),
     paper_size TEXT NOT NULL DEFAULT 'A4' CHECK (paper_size IN ('A4', 'A5')),
     color_mode TEXT NOT NULL DEFAULT 'BW' CHECK (color_mode IN ('BW', 'COLOR')),
     print_sides TEXT NOT NULL DEFAULT 'ONE_SIDED' CHECK (print_sides IN ('ONE_SIDED', 'BOTH_SIDES')),
     copies INT NOT NULL DEFAULT 1 CHECK (copies > 0),
     page_selection TEXT NULL,
-    selected_page_count INT NOT NULL DEFAULT 1,
-    subtotal_paisa INT NOT NULL DEFAULT 0,
-    discount_paisa INT NOT NULL DEFAULT 0,
-    total_amount_paisa INT NOT NULL DEFAULT 0,
+    selected_page_count INT NOT NULL DEFAULT 1 CHECK (selected_page_count > 0),
+    subtotal_paisa INT NOT NULL DEFAULT 0 CHECK (subtotal_paisa >= 0),
+    discount_paisa INT NOT NULL DEFAULT 0 CHECK (discount_paisa >= 0),
+    total_amount_paisa INT NOT NULL DEFAULT 0 CHECK (total_amount_paisa >= 0),
     currency TEXT NOT NULL DEFAULT 'INR',
     payment_status TEXT NOT NULL DEFAULT 'PENDING' CHECK (payment_status IN ('PENDING', 'PAID', 'FAILED', 'REFUNDED')),
     payment_id TEXT NULL,
@@ -124,7 +124,7 @@ CREATE TABLE IF NOT EXISTS print_order_events (
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS print_jobs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    -- Strict idempotency: 1 order can only ever have 1 print job
+    -- Strict Idempotency Invariant: Exactly one print job can exist per order
     order_id UUID UNIQUE NOT NULL REFERENCES print_orders(id) ON DELETE CASCADE,
     printer_id UUID REFERENCES printers(id) ON DELETE SET NULL,
     agent_id UUID REFERENCES print_agents(id) ON DELETE SET NULL,
@@ -145,7 +145,7 @@ CREATE TABLE IF NOT EXISTS print_jobs (
 );
 
 -- ----------------------------------------------------------------------------
--- 7. PAYMENT TRANSACTIONS TABLE (IDEMPOTENT WEBHOOKS)
+-- 7. PAYMENT TRANSACTIONS TABLE (IDEMPOTENT GATEWAY LEDGER)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS payment_transactions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -153,7 +153,7 @@ CREATE TABLE IF NOT EXISTS payment_transactions (
     provider TEXT NOT NULL,
     transaction_id TEXT NOT NULL,
     idempotency_key TEXT UNIQUE NOT NULL,
-    amount_paisa INT NOT NULL,
+    amount_paisa INT NOT NULL CHECK (amount_paisa >= 0),
     currency TEXT NOT NULL DEFAULT 'INR',
     status TEXT NOT NULL CHECK (status IN ('PENDING', 'SUCCESS', 'FAILED')),
     raw_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -162,7 +162,7 @@ CREATE TABLE IF NOT EXISTS payment_transactions (
 );
 
 -- ----------------------------------------------------------------------------
--- 8. INDEXES FOR HIGH-THROUGHPUT QUEUING AND LOOKUPS
+-- 8. INDEXES FOR PERFORMANCE
 -- ----------------------------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_print_orders_status ON print_orders(status);
 CREATE INDEX IF NOT EXISTS idx_print_orders_customer_phone ON print_orders(customer_phone);
@@ -190,11 +190,14 @@ RETURNS TABLE (
     color_mode TEXT,
     print_sides TEXT,
     page_selection TEXT
-) AS $$
+)
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
 DECLARE
     v_job_id UUID;
 BEGIN
-    -- Atomically select the next eligible job using SKIP LOCKED
+    -- Atomically select the next eligible job using row-level SKIP LOCKED
     SELECT pj.id INTO v_job_id
     FROM print_jobs pj
     WHERE pj.status IN ('QUEUED', 'RETRY_PENDING')
@@ -228,7 +231,7 @@ BEGIN
     FROM print_jobs pj
     WHERE pj.id = v_job_id;
 
-    -- Return full job context to agent
+    -- Return full job context to the agent
     RETURN QUERY
     SELECT 
         pj.id AS job_id,
@@ -248,62 +251,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- ----------------------------------------------------------------------------
--- 10. DEFAULT SEED DATA (MOCK PRINTER & AGENT & SETTINGS)
--- ----------------------------------------------------------------------------
-INSERT INTO print_settings (
-    default_paper,
-    bw_price_paisa,
-    color_price_paisa,
-    duplex_price_paisa,
-    a5_bw_price_paisa,
-    a5_color_price_paisa,
-    max_copies,
-    max_file_size_bytes
-) VALUES (
-    'A4',
-    200,
-    1000,
-    200,
-    100,
-    500,
-    50,
-    52428800
-) ON CONFLICT DO NOTHING;
-
-INSERT INTO printers (
-    id,
-    name,
-    location,
-    status,
-    is_active,
-    supports_color,
-    supports_duplex,
-    supported_paper_sizes
-) VALUES (
-    '00000000-0000-0000-0000-000000000001',
-    'Mock Shop Laser Printer',
-    'Main Desk',
-    'ONLINE',
-    true,
-    true,
-    true,
-    '{"A4", "A5"}'
-) ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO print_agents (
-    id,
-    agent_name,
-    api_key_hash,
-    status,
-    version,
-    capabilities
-) VALUES (
-    '00000000-0000-0000-0000-000000000002',
-    'shop-pc-01',
-    -- sha256 of 'mock-agent-secret-token'
-    '9b66236b285b0d09a5b3a3c26b9a8cfefefb54cf21d2e1c4a035728a47401c10',
-    'ONLINE',
-    '1.0.0',
-    '{"printer": "Mock Shop Laser Printer", "duplex": true, "color": true}'::jsonb
-) ON CONFLICT (agent_name) DO NOTHING;
+-- Secure procedure: revoke execute from public and anon
+REVOKE EXECUTE ON FUNCTION claim_next_print_job(UUID, UUID) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION claim_next_print_job(UUID, UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION claim_next_print_job(UUID, UUID) TO service_role;
