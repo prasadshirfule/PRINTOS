@@ -3,8 +3,12 @@ import crypto from 'crypto';
 import { getRepository } from '@/lib/repository';
 import { WhatsAppInboxService } from '@/lib/whatsapp/inbox-service';
 import { WhatsAppWorkerEngine } from '@/lib/whatsapp/worker-engine';
+import { globalRateLimiter } from '@/lib/security/rate-limiter';
+import { createLogger } from '@/lib/observability/logger';
 
 export const dynamic = 'force-dynamic';
+
+const logger = createLogger('WhatsAppWebhookRoute');
 
 /**
  * GET Handler: Meta WhatsApp Webhook Verification Challenge
@@ -18,12 +22,14 @@ export async function GET(req: NextRequest) {
   const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN || 'printos_whatsapp_verify_token';
 
   if (mode === 'subscribe' && token === verifyToken) {
+    logger.info('Meta webhook verification challenge passed');
     return new NextResponse(challenge, {
       status: 200,
       headers: { 'Content-Type': 'text/plain' },
     });
   }
 
+  logger.warn('Meta webhook verification challenge failed: invalid token');
   return NextResponse.json({ error: 'Forbidden: Invalid verification token' }, { status: 403 });
 }
 
@@ -31,6 +37,20 @@ export async function GET(req: NextRequest) {
  * POST Handler: Inbound WhatsApp Webhook Ingestion (OpenWA & Meta Cloud API)
  */
 export async function POST(req: NextRequest) {
+  const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'anonymous';
+  const rateLimit = globalRateLimiter.check(`wa_webhook_${clientIp}`, 120, 60);
+
+  if (!rateLimit.allowed) {
+    logger.warn('Rate limit exceeded on WhatsApp webhook', { clientIp });
+    return NextResponse.json(
+      { error: 'Too many requests. Please slow down.' },
+      {
+        status: 429,
+        headers: { 'Retry-After': String(rateLimit.resetInSeconds) },
+      }
+    );
+  }
+
   try {
     const rawBody = await req.text();
     const openwaSignatureHeader = req.headers.get('x-openwa-signature');
@@ -43,6 +63,7 @@ export async function POST(req: NextRequest) {
 
     // Production guard: enforce webhook secret for OpenWA in production
     if (isProduction && provider === 'openwa' && !openwaSecret) {
+      logger.error('Missing OPENWA_WEBHOOK_SECRET in production');
       return NextResponse.json(
         { error: 'Server configuration error: OPENWA_WEBHOOK_SECRET is required in production' },
         { status: 500 }
@@ -56,6 +77,7 @@ export async function POST(req: NextRequest) {
       }
 
       if (!openwaSignatureHeader || !openwaSignatureHeader.startsWith('sha256=')) {
+        logger.warn('Missing or malformed X-OpenWA-Signature header', { clientIp });
         return NextResponse.json({ error: 'Missing or malformed X-OpenWA-Signature header' }, { status: 401 });
       }
 
@@ -72,6 +94,7 @@ export async function POST(req: NextRequest) {
         receivedSigBuf.length !== expectedSigBuf.length ||
         !crypto.timingSafeEqual(receivedSigBuf, expectedSigBuf)
       ) {
+        logger.warn('Invalid OpenWA HMAC signature', { clientIp });
         return NextResponse.json({ error: 'Invalid OpenWA HMAC signature' }, { status: 401 });
       }
     }
@@ -79,6 +102,7 @@ export async function POST(req: NextRequest) {
     // 2. Verify Meta HMAC-SHA256 signature if configured and OpenWA signature was not used
     if (metaSecret && !openwaSignatureHeader) {
       if (!metaSignatureHeader || !metaSignatureHeader.startsWith('sha256=')) {
+        logger.warn('Missing or malformed Meta signature header', { clientIp });
         return NextResponse.json({ error: 'Missing or malformed signature header' }, { status: 401 });
       }
 
@@ -95,6 +119,7 @@ export async function POST(req: NextRequest) {
         receivedSigBuf.length !== expectedSigBuf.length ||
         !crypto.timingSafeEqual(receivedSigBuf, expectedSigBuf)
       ) {
+        logger.warn('Invalid Meta HMAC signature', { clientIp });
         return NextResponse.json({ error: 'Invalid Meta HMAC signature' }, { status: 401 });
       }
     }
@@ -116,12 +141,17 @@ export async function POST(req: NextRequest) {
     const repo = getRepository();
     const enqueuedCount = await WhatsAppInboxService.enqueueInboundEvents(parsedEvents, repo);
 
+    logger.info('Ingested inbound WhatsApp events', {
+      eventCount: parsedEvents.length,
+      enqueuedCount,
+      sender: parsedEvents[0]?.from,
+    });
+
     // Eager best-effort asynchronous cycle trigger (Latency optimization only; Cron is authoritative)
     if (process.env.DISABLE_EAGER_WORKER !== 'true') {
       const worker = new WhatsAppWorkerEngine(repo);
-      // Non-blocking trigger
       worker.runCycle().catch((e) => {
-        console.warn('[Eager Worker Trigger] Background cycle failed, deferring to cron:', e);
+        logger.warn('Background worker cycle failed, deferring to cron', { error: e });
       });
     }
 
@@ -131,7 +161,7 @@ export async function POST(req: NextRequest) {
       eventsReceived: parsedEvents.length,
     });
   } catch (err: unknown) {
-    console.error('[WhatsApp Webhook Ingestion Error]:', err);
+    logger.error('WhatsApp Webhook Ingestion Error', err instanceof Error ? err : undefined);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Internal webhook error' },
       { status: 500 }

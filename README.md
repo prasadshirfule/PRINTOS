@@ -139,8 +139,12 @@ Detailed architecture specifications, setup manuals, and testing guidelines are 
   - Ultra-fast silent background printing via SumatraPDF CLI with strict duplex, color, and page range flags.
   - Native Windows Print Spooler PowerShell fallback (`Start-Process -Verb PrintTo`).
   - Short-lived presigned document streaming with automatic ephemeral file cleanup.
-- [ ] **Phase 5: Production Hardening & File Retention Cleanup**
-  - Automated file purge cron jobs (`/api/cron/process-queues`), structured observability, and rate limiting.
+- [x] **Phase 5: Production Hardening, Observability & Cleanup**
+  - File retention & document purge cron endpoint (`/api/cron/cleanup`) with `CRON_SECRET` authentication.
+  - Fail-fast production environment validator (`ProductionEnvValidator`) detecting misconfiguration immediately on startup.
+  - Sliding-window memory rate limiter (`MemoryRateLimiter`) protecting public webhook routes against denial-of-service.
+  - Structured JSON/formatted contextual logging (`Logger`) across all critical paths.
+  - 100% passing test suite (19 test suites, 101+ automated tests).
 
 ---
 
@@ -169,6 +173,9 @@ NODE_ENV="development"
 PRINTOS_AGENT_KEY="mock-agent-secret-token"
 PRINTOS_AGENT_NAME="shop-pc-01"
 PRINTOS_API_URL="http://localhost:3000"
+
+# Cron Security Token
+CRON_SECRET="your-secure-cron-secret-token"
 
 # Optional: Preferred Physical Printer Name (defaults to Windows default)
 # PRINT_AGENT_PRINTER_NAME="Canon MF3010"
@@ -223,7 +230,7 @@ npm run agent:mock:fail
 PRINTOS includes a complete test suite covering unit calculations, concurrency invariants, and end-to-end acceptance flows:
 
 ```bash
-# Run all Vitest test suites (16 test suites, 92+ tests)
+# Run all Vitest test suites (19 test suites, 101+ tests)
 npm test
 
 # Run Phase 1 End-to-End Acceptance Test

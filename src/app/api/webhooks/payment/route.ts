@@ -2,8 +2,26 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getRepository } from '@/lib/repository';
 import { getPaymentProvider, FulfillabilityPolicy } from '@/lib/payment';
 import { WhatsAppOutboxService } from '@/lib/whatsapp/outbox-service';
+import { globalRateLimiter } from '@/lib/security/rate-limiter';
+import { createLogger } from '@/lib/observability/logger';
+
+const logger = createLogger('PaymentWebhookRoute');
 
 export async function POST(req: NextRequest) {
+  const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'anonymous';
+  const rateLimit = globalRateLimiter.check(`pay_webhook_${clientIp}`, 120, 60);
+
+  if (!rateLimit.allowed) {
+    logger.warn('Rate limit exceeded on payment webhook', { clientIp });
+    return NextResponse.json(
+      { error: 'Too many payment webhook requests. Please slow down.' },
+      {
+        status: 429,
+        headers: { 'Retry-After': String(rateLimit.resetInSeconds) },
+      }
+    );
+  }
+
   try {
     const rawBody = await req.text();
     const headers: Record<string, string> = {};
@@ -15,6 +33,7 @@ export async function POST(req: NextRequest) {
     const verification = await paymentProvider.verifyWebhook(headers, rawBody);
 
     if (!verification.isValid) {
+      logger.warn('Invalid payment webhook signature', { clientIp, error: verification.error });
       return NextResponse.json(
         { error: verification.error || 'Invalid payment webhook signature' },
         { status: 400 }
@@ -25,15 +44,18 @@ export async function POST(req: NextRequest) {
     const repo = getRepository();
 
     if (!orderId) {
+      logger.warn('Missing orderId in payment webhook', { clientIp, transactionId });
       return NextResponse.json({ error: 'Missing orderId in payment webhook' }, { status: 400 });
     }
 
     const order = await repo.getOrder(orderId);
     if (!order) {
+      logger.warn('Order not found for payment webhook', { orderId, transactionId });
       return NextResponse.json({ error: `Order ${orderId} not found` }, { status: 404 });
     }
 
     if (status !== 'SUCCESS') {
+      logger.warn('Payment attempt failed', { orderId, transactionId, provider });
       await repo.recordOrderEvent(order.id, 'PAYMENT_FAILED', `Payment attempt failed via ${provider}`, {
         transactionId,
         rawResponse: verification.rawPayload,
@@ -48,6 +70,13 @@ export async function POST(req: NextRequest) {
 
     // Strict amount reconciliation: incoming amount in paisa must match order total
     if (order.totalAmountPaisa > 0 && amountPaisa !== order.totalAmountPaisa) {
+      logger.error('Payment amount mismatch detected', {
+        orderId,
+        transactionId,
+        expectedPaisa: order.totalAmountPaisa,
+        receivedPaisa: amountPaisa,
+      });
+
       await repo.recordOrderEvent(
         order.id,
         'PAYMENT_AMOUNT_MISMATCH',
@@ -81,6 +110,7 @@ export async function POST(req: NextRequest) {
       );
 
       if (isDuplicate) {
+        logger.info('Payment already processed idempotently', { orderId: updatedOrder.id, transactionId });
         return NextResponse.json({
           success: true,
           message: 'Payment already processed idempotently',
@@ -90,6 +120,14 @@ export async function POST(req: NextRequest) {
           isDuplicate: true,
         });
       }
+
+      logger.info('Payment accepted and order queued', {
+        orderId: updatedOrder.id,
+        orderNumber: updatedOrder.orderNumber,
+        jobId: job?.id,
+        amountPaisa,
+        transactionId,
+      });
 
       if (conv) {
         await repo.updateConversationState(
@@ -130,7 +168,7 @@ export async function POST(req: NextRequest) {
       const assessment = await FulfillabilityPolicy.isOrderFulfillable(order, repo);
 
       if (assessment.fulfillable) {
-        // Late order can be resurrected safely
+        logger.info('Late payment accepted and order resurrected', { orderId: order.id, transactionId });
         const { order: updatedOrder, job } = await repo.simulateVerifiedPayment(
           order.id,
           transactionId,
@@ -171,7 +209,11 @@ export async function POST(req: NextRequest) {
           status: 'QUEUED',
         });
       } else {
-        // Order cannot be fulfilled -> Transition to REFUND_PENDING for operator action
+        logger.warn('Late payment unfulfillable; flagged for refund', {
+          orderId: order.id,
+          reason: assessment.reason,
+        });
+
         const updatedOrder = await repo.updateOrderStatus(order.id, 'REFUND_PENDING', {
           reason: assessment.reason,
           transactionId,
@@ -213,6 +255,7 @@ export async function POST(req: NextRequest) {
 
     // Case 3: Payment on Cancelled order
     if (order.status === 'CANCELLED') {
+      logger.warn('Payment received on cancelled order', { orderId: order.id, transactionId });
       await repo.recordOrderEvent(
         order.id,
         'PAYMENT_ON_CANCELLED_ORDER',
@@ -240,6 +283,7 @@ export async function POST(req: NextRequest) {
     }
 
     // If order was already paid / queued / completed
+    logger.info('Payment already completed for order in status', { orderId: order.id, status: order.status });
     return NextResponse.json({
       success: true,
       message: `Payment already processed for order in status ${order.status}`,
@@ -248,7 +292,7 @@ export async function POST(req: NextRequest) {
       isDuplicate: true,
     });
   } catch (err: unknown) {
-    console.error('[Payment Webhook Error]:', err);
+    logger.error('Payment Webhook Error', err instanceof Error ? err : undefined);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Failed to process payment webhook' },
       { status: 500 }
