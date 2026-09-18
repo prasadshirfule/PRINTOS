@@ -54,7 +54,7 @@ describe('Supabase PostgreSQL Real Integration Test', () => {
       docBucket = { id: 'print-documents', name: 'print-documents', public: false } as any;
     }
 
-    expect(docBucket.public).toBe(false); // MUST BE PRIVATE
+    expect(docBucket?.public).toBe(false); // MUST BE PRIVATE
 
     // Upload test document to private storage
     const testDocPath = `integration-tests/test-${Date.now()}.pdf`;
