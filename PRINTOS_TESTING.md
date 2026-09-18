@@ -22,7 +22,8 @@ PRINTOS includes a comprehensive unit, integration, and acceptance test suite wr
 | `tests/supabase-whatsapp-integration.test.ts` | Repository layer integration for WhatsApp entities with database schema | 4 | PASS |
 | `tests/payment-provider.test.ts` | Razorpay signature verification, NPCI UPI intent generation, and mock provider | 8 | PASS |
 | `tests/payment-webhook.test.ts` | Idempotent webhook delivery, amount reconciliation, atomic job creation, late payment | 5 | PASS |
-| **Total Automated Tests** | | **87+** | **100% PASS** |
+| `tests/windows-print-agent.test.ts` | SumatraPDF settings formatting, hardware discovery, and agent spooling | 5 | PASS |
+| **Total Automated Tests** | | **92+** | **100% PASS** |
 
 ---
 
@@ -35,8 +36,8 @@ npm test
 
 Expected Output:
 ```
- Test Files  15 passed (15)
-      Tests  87 passed (87)
+ Test Files  16 passed (16)
+      Tests  92 passed (92)
 ```
 
 To run tests in watch mode during development:

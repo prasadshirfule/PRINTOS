@@ -96,10 +96,13 @@ flowchart TD
   - Late payment on expired orders with automated hardware fulfillability evaluation.
   - Full automated test suite (87+ tests passing across 15 test suites).
 
-- **Phase 4: Production Windows Print Agent**
-  - Native Windows Print Spooler integration (PowerShell / SumatraPDF CLI).
-  - Hardware duplex and color capability auto-discovery via WMI/CIM.
-  - Short-lived signed document streaming and automatic cleanup.
+- **Phase 4: Production Windows Print Agent (COMPLETED)**
+  - Native Windows Print Agent daemon (`src/agent/windows-print-agent.ts`) with zero-trust token authentication (`x-agent-key`).
+  - Automated hardware capability discovery via Windows WMI/CIM (`Get-CimInstance Win32_Printer`).
+  - Silent background printing via SumatraPDF CLI with strict duplex, color, copies, and page range flags.
+  - Native Windows Print Spooler PowerShell fallback (`Start-Process -Verb PrintTo`).
+  - Ephemeral document streaming with strict `finally` block cleanup.
+  - Full automated test suite (92+ tests passing across 16 test suites).
 
 - **Phase 5: Production Hardening, Observability & Cleanup**
   - File retention cleanup cron job (`/api/cron/process-queues`).

@@ -133,9 +133,12 @@ Detailed architecture specifications, setup manuals, and testing guidelines are 
   - Strict integer paisa amount reconciliation rejecting client-side tampering.
   - Idempotent payment webhook (`/api/webhooks/payment`) transitioning orders to `PAID` ➔ `QUEUED` with atomic `print_jobs` creation.
   - Late payment on expired orders with automated hardware fulfillability evaluation.
-- [ ] **Phase 4: Native Windows Print Agent Production Daemon**
-  - Silent printing via SumatraPDF CLI / Windows Print Spooler API.
-  - Automatic printer capability discovery via WMI/CIM.
+- [x] **Phase 4: Native Windows Print Agent Production Daemon**
+  - Native Windows Print Agent daemon (`npm run agent:windows`) with zero-trust token authentication (`x-agent-key`).
+  - Automated hardware capability discovery via Windows WMI/CIM (`Get-CimInstance Win32_Printer`).
+  - Ultra-fast silent background printing via SumatraPDF CLI with strict duplex, color, and page range flags.
+  - Native Windows Print Spooler PowerShell fallback (`Start-Process -Verb PrintTo`).
+  - Short-lived presigned document streaming with automatic ephemeral file cleanup.
 - [ ] **Phase 5: Production Hardening & File Retention Cleanup**
   - Automated file purge cron jobs (`/api/cron/process-queues`), structured observability, and rate limiting.
 
@@ -167,6 +170,9 @@ PRINTOS_AGENT_KEY="mock-agent-secret-token"
 PRINTOS_AGENT_NAME="shop-pc-01"
 PRINTOS_API_URL="http://localhost:3000"
 
+# Optional: Preferred Physical Printer Name (defaults to Windows default)
+# PRINT_AGENT_PRINTER_NAME="Canon MF3010"
+
 # Optional: Razorpay Production Credentials (Mock provider used if omitted)
 # PAYMENT_PROVIDER="razorpay"
 # RAZORPAY_KEY_ID="rzp_live_..."
@@ -195,15 +201,18 @@ Navigate to:
 
 ---
 
-## 🤖 Running the Mock Agent
+## 🖨️ Running the Print Agent
 
-The Mock Print Agent simulates a shop computer claiming print jobs from the cloud queue:
+PRINTOS supports both production hardware printing and development simulation:
 
 ```bash
-# Standard mock agent daemon (healthy printer, 10s heartbeats)
+# Production: Native Windows Print Agent (connects to physical printers via SumatraPDF / Spooler)
+npm run agent:windows
+
+# Development: Standard mock agent daemon (healthy printer simulation, 10s heartbeats)
 npm run agent:mock
 
-# Simulated hardware failure mode (tests paper jam, retry backoff & terminal failure)
+# Testing: Simulated hardware failure mode (tests paper jam, retry backoff & terminal failure)
 npm run agent:mock:fail
 ```
 
@@ -214,7 +223,7 @@ npm run agent:mock:fail
 PRINTOS includes a complete test suite covering unit calculations, concurrency invariants, and end-to-end acceptance flows:
 
 ```bash
-# Run all Vitest test suites (15 test suites, 87+ tests)
+# Run all Vitest test suites (16 test suites, 92+ tests)
 npm test
 
 # Run Phase 1 End-to-End Acceptance Test
