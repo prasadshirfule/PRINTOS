@@ -126,8 +126,13 @@ Detailed architecture specifications, setup manuals, and testing guidelines are 
   - Conversational state machine (`IDLE` ➔ `AWAITING_DOCUMENT` ➔ `AWAITING_CONFIG` ➔ `AWAITING_PAYMENT`).
   - Fulfillability policy check (preventing payment if no compatible printer is `ONLINE`).
   - Mock and live WhatsApp provider abstractions.
-- [ ] **Phase 3: Production Payment Gateway**
-  - Production Razorpay / Cashfree UPI webhook handlers with dynamic QR intents.
+- [x] **Phase 3: Production Payment Gateway & Dynamic UPI Intents**
+  - Payment abstraction layer with `RazorpayPaymentProvider` and `MockPaymentProvider`.
+  - Dynamic NPCI UPI URI Scheme intent generation (`upi://pay?...`) with QR payload & checkout URL.
+  - Robust HMAC-SHA256 signature verification (`X-Razorpay-Signature`).
+  - Strict integer paisa amount reconciliation rejecting client-side tampering.
+  - Idempotent payment webhook (`/api/webhooks/payment`) transitioning orders to `PAID` ➔ `QUEUED` with atomic `print_jobs` creation.
+  - Late payment on expired orders with automated hardware fulfillability evaluation.
 - [ ] **Phase 4: Native Windows Print Agent Production Daemon**
   - Silent printing via SumatraPDF CLI / Windows Print Spooler API.
   - Automatic printer capability discovery via WMI/CIM.
@@ -161,6 +166,14 @@ NODE_ENV="development"
 PRINTOS_AGENT_KEY="mock-agent-secret-token"
 PRINTOS_AGENT_NAME="shop-pc-01"
 PRINTOS_API_URL="http://localhost:3000"
+
+# Optional: Razorpay Production Credentials (Mock provider used if omitted)
+# PAYMENT_PROVIDER="razorpay"
+# RAZORPAY_KEY_ID="rzp_live_..."
+# RAZORPAY_KEY_SECRET="your_key_secret"
+# RAZORPAY_WEBHOOK_SECRET="your_webhook_secret"
+# UPI_MERCHANT_VPA="printos@upi"
+# UPI_MERCHANT_NAME="PRINTOS Shop"
 
 # Optional: Supabase Production Credentials (In-memory repository is used if omitted)
 # NEXT_PUBLIC_SUPABASE_URL="https://your-project.supabase.co"
@@ -201,7 +214,7 @@ npm run agent:mock:fail
 PRINTOS includes a complete test suite covering unit calculations, concurrency invariants, and end-to-end acceptance flows:
 
 ```bash
-# Run all Vitest test suites (13 test suites, 74+ tests)
+# Run all Vitest test suites (15 test suites, 87+ tests)
 npm test
 
 # Run Phase 1 End-to-End Acceptance Test

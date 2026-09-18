@@ -1,0 +1,194 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import crypto from 'crypto';
+import {
+  RazorpayPaymentProvider,
+  MockPaymentProvider,
+  getPaymentProvider,
+  setPaymentProvider,
+} from '@/lib/payment';
+
+describe('Payment Provider Abstraction Layer', () => {
+  const testWebhookSecret = 'test_webhook_secret_key_12345';
+
+  beforeEach(() => {
+    setPaymentProvider(null);
+  });
+
+  afterEach(() => {
+    setPaymentProvider(null);
+  });
+
+  describe('RazorpayPaymentProvider', () => {
+    const razorpay = new RazorpayPaymentProvider({
+      keyId: 'rzp_test_key_123',
+      keySecret: 'rzp_test_secret_456',
+      webhookSecret: testWebhookSecret,
+      merchantVpa: 'testshop@upi',
+      merchantName: 'Test Print Shop',
+    });
+
+    it('generates a valid payment intent with standard NPCI UPI URI and checkout link', async () => {
+      const intent = await razorpay.createPaymentIntent({
+        orderId: 'ord_12345',
+        orderNumber: 'P1001',
+        amountPaisa: 4800, // ₹48.00
+        customerPhone: '+919876543210',
+      });
+
+      expect(intent.amountPaisa).toBe(4800);
+      expect(intent.currency).toBe('INR');
+      expect(intent.orderNumber).toBe('P1001');
+      expect(intent.upiIntentUrl).toContain('upi://pay?');
+      expect(intent.upiIntentUrl).toContain('pa=testshop@upi');
+      expect(intent.upiIntentUrl).toContain('am=48.00');
+      expect(intent.upiIntentUrl).toContain('tr=P1001');
+      expect(intent.paymentUrl).toContain('rzp.io/i/');
+    });
+
+    it('verifies a valid webhook payload with correct HMAC-SHA256 signature', async () => {
+      const payload = {
+        event: 'payment.captured',
+        payload: {
+          payment: {
+            entity: {
+              id: 'pay_99887766',
+              amount: 4800,
+              currency: 'INR',
+              status: 'captured',
+              order_id: 'order_rzp_123',
+              notes: {
+                orderId: 'ord_12345',
+              },
+            },
+          },
+        },
+      };
+
+      const rawBody = JSON.stringify(payload);
+      const signature = crypto
+        .createHmac('sha256', testWebhookSecret)
+        .update(rawBody)
+        .digest('hex');
+
+      const verification = await razorpay.verifyWebhook(
+        { 'x-razorpay-signature': signature },
+        rawBody
+      );
+
+      expect(verification.isValid).toBe(true);
+      expect(verification.orderId).toBe('ord_12345');
+      expect(verification.transactionId).toBe('pay_99887766');
+      expect(verification.amountPaisa).toBe(4800);
+      expect(verification.status).toBe('SUCCESS');
+      expect(verification.provider).toBe('RAZORPAY_UPI');
+    });
+
+    it('rejects an invalid webhook signature with HTTP 400 validation error', async () => {
+      const payload = {
+        event: 'payment.captured',
+        payload: {
+          payment: {
+            entity: {
+              id: 'pay_tampered',
+              amount: 100,
+              status: 'captured',
+            },
+          },
+        },
+      };
+
+      const rawBody = JSON.stringify(payload);
+      const badSignature = 'invalid_tampered_signature_hex_value';
+
+      const verification = await razorpay.verifyWebhook(
+        { 'x-razorpay-signature': badSignature },
+        rawBody
+      );
+
+      expect(verification.isValid).toBe(false);
+      expect(verification.error).toBe('Invalid Razorpay webhook signature');
+    });
+
+    it('rejects a webhook request when signature header is missing', async () => {
+      const rawBody = JSON.stringify({ event: 'payment.captured' });
+      const verification = await razorpay.verifyWebhook({}, rawBody);
+
+      expect(verification.isValid).toBe(false);
+      expect(verification.error).toBe('Missing X-Razorpay-Signature header');
+    });
+
+    it('correctly maps payment.failed status to FAILED', async () => {
+      const payload = {
+        event: 'payment.failed',
+        payload: {
+          payment: {
+            entity: {
+              id: 'pay_failed_123',
+              amount: 2500,
+              status: 'failed',
+              notes: { orderId: 'ord_failed_1' },
+            },
+          },
+        },
+      };
+
+      const rawBody = JSON.stringify(payload);
+      const signature = crypto
+        .createHmac('sha256', testWebhookSecret)
+        .update(rawBody)
+        .digest('hex');
+
+      const verification = await razorpay.verifyWebhook(
+        { 'x-razorpay-signature': signature },
+        rawBody
+      );
+
+      expect(verification.isValid).toBe(true);
+      expect(verification.status).toBe('FAILED');
+      expect(verification.amountPaisa).toBe(2500);
+    });
+  });
+
+  describe('MockPaymentProvider', () => {
+    it('generates mock payment intent and validates simulated webhooks', async () => {
+      const mockProvider = new MockPaymentProvider();
+      const intent = await mockProvider.createPaymentIntent({
+        orderId: 'mock_ord_1',
+        orderNumber: 'P2002',
+        amountPaisa: 1500,
+        customerPhone: '+919999999999',
+      });
+
+      expect(intent.amountPaisa).toBe(1500);
+      expect(intent.paymentUrl).toContain('pay.printos.local');
+
+      const verification = await mockProvider.verifyWebhook(
+        {},
+        JSON.stringify({
+          orderId: 'mock_ord_1',
+          paymentId: intent.paymentId,
+          amountPaisa: 1500,
+          status: 'SUCCESS',
+        })
+      );
+
+      expect(verification.isValid).toBe(true);
+      expect(verification.orderId).toBe('mock_ord_1');
+      expect(verification.transactionId).toBe(intent.paymentId);
+      expect(verification.status).toBe('SUCCESS');
+    });
+  });
+
+  describe('Payment Provider Factory', () => {
+    it('returns default MockPaymentProvider in test/development when env is unset', () => {
+      const provider = getPaymentProvider();
+      expect(provider).toBeInstanceOf(MockPaymentProvider);
+    });
+
+    it('supports custom provider injection via setPaymentProvider', () => {
+      const custom = new MockPaymentProvider();
+      setPaymentProvider(custom);
+      expect(getPaymentProvider()).toBe(custom);
+    });
+  });
+});

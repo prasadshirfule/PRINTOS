@@ -87,9 +87,14 @@ flowchart TD
   - Fulfillability policy check (verifying matching `ONLINE` hardware before payment quote).
   - Full automated test suite (74+ tests passing across 13 test suites).
 
-- **Phase 3: Production Payment Gateway & Dynamic UPI Intents (IN PROGRESS)**
-  - UPI / Razorpay / Cashfree gateway integration with dynamic QR generation.
-  - Idempotent payment webhook verification and automated transition to `PAID` / `QUEUED`.
+- **Phase 3: Production Payment Gateway & Dynamic UPI Intents (COMPLETED)**
+  - Payment abstraction layer (`IPaymentProvider`) with `RazorpayPaymentProvider` and `MockPaymentProvider`.
+  - Dynamic NPCI UPI URI Scheme intent generation (`upi://pay?...`) with QR payload & checkout URL.
+  - Robust HMAC-SHA256 webhook signature verification (`X-Razorpay-Signature`).
+  - Strict integer paisa amount reconciliation rejecting client-side tampering.
+  - Idempotent payment webhook (`/api/webhooks/payment`) transitioning orders to `PAID` ➔ `QUEUED` with atomic `print_jobs` creation.
+  - Late payment on expired orders with automated hardware fulfillability evaluation.
+  - Full automated test suite (87+ tests passing across 15 test suites).
 
 - **Phase 4: Production Windows Print Agent**
   - Native Windows Print Spooler integration (PowerShell / SumatraPDF CLI).

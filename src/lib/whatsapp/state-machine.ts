@@ -9,6 +9,7 @@ import { IPrintOSRepository } from '@/lib/repository';
 import { WhatsAppOutboxService } from './outbox-service';
 import { calculatePrintOrderPrice } from '@/lib/pricing/pricing-engine';
 import { parsePageRange } from '@/lib/pricing/page-range';
+import { getPaymentProvider } from '@/lib/payment';
 
 export class InvalidTransitionError extends Error {
   constructor(currentState: ConversationState, event: string) {
@@ -582,8 +583,18 @@ export class WhatsAppStateMachine {
         conv.version
       );
 
+      const paymentProvider = getPaymentProvider();
+      const paymentIntent = await paymentProvider.createPaymentIntent({
+        orderId,
+        orderNumber,
+        amountPaisa: s.totalAmountPaisa || 0,
+        customerPhone: conv.customerPhone,
+        customerName: conv.customerName,
+      });
+
       const amountRupees = ((s.totalAmountPaisa || 0) / 100).toFixed(2);
-      const upiLink = `upi://pay?pa=printos@upi&pn=PRINTOS&am=${amountRupees}&cu=INR&tr=${orderNumber}`;
+      const upiLink = paymentIntent.upiIntentUrl || `upi://pay?pa=printos@upi&pn=PRINTOS&am=${amountRupees}&cu=INR&tr=${orderNumber}`;
+      const checkoutLink = paymentIntent.paymentUrl ? `\n💳 *Online Checkout:* ${paymentIntent.paymentUrl}\n` : '';
 
       await WhatsAppOutboxService.queueText(
         repo,
@@ -591,7 +602,8 @@ export class WhatsAppStateMachine {
         `💳 *Payment Required: ₹${amountRupees}*\n\n` +
         `Order *#${orderNumber}* created.\n` +
         `Pay using UPI to immediately queue your print job:\n\n` +
-        `👉 *UPI Pay Link:* ${upiLink}\n\n` +
+        `👉 *UPI Pay Link:* ${upiLink}\n` +
+        checkoutLink + `\n` +
         `_Printing starts automatically once payment is verified._`,
         conv.id,
         orderId

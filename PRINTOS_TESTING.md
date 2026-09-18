@@ -20,8 +20,9 @@ PRINTOS includes a comprehensive unit, integration, and acceptance test suite wr
 | `tests/whatsapp-state-machine.test.ts` | Multi-step conversational transitions (`IDLE` ➔ `AWAITING_DOCUMENT` ➔ `AWAITING_CONFIG`) | 8 | PASS |
 | `tests/whatsapp-worker-recovery.test.ts` | Outbox worker retry backoff, dead-lettering, and worker recovery | 4 | PASS |
 | `tests/supabase-whatsapp-integration.test.ts` | Repository layer integration for WhatsApp entities with database schema | 4 | PASS |
-| `tests/supabase-integration.test.ts` | Core repository Supabase integration suite | 4 | PASS |
-| **Total Automated Tests** | | **74+** | **100% PASS** |
+| `tests/payment-provider.test.ts` | Razorpay signature verification, NPCI UPI intent generation, and mock provider | 8 | PASS |
+| `tests/payment-webhook.test.ts` | Idempotent webhook delivery, amount reconciliation, atomic job creation, late payment | 5 | PASS |
+| **Total Automated Tests** | | **87+** | **100% PASS** |
 
 ---
 
@@ -34,8 +35,8 @@ npm test
 
 Expected Output:
 ```
- Test Files  13 passed (13)
-      Tests  74 passed (74)
+ Test Files  15 passed (15)
+      Tests  87 passed (87)
 ```
 
 To run tests in watch mode during development:

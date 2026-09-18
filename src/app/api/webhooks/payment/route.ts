@@ -15,11 +15,18 @@ export async function POST(req: NextRequest) {
     const verification = await paymentProvider.verifyWebhook(headers, rawBody);
 
     if (!verification.isValid) {
-      return NextResponse.json({ error: 'Invalid payment webhook signature' }, { status: 400 });
+      return NextResponse.json(
+        { error: verification.error || 'Invalid payment webhook signature' },
+        { status: 400 }
+      );
     }
 
     const { orderId, transactionId, amountPaisa, status, provider } = verification;
     const repo = getRepository();
+
+    if (!orderId) {
+      return NextResponse.json({ error: 'Missing orderId in payment webhook' }, { status: 400 });
+    }
 
     const order = await repo.getOrder(orderId);
     if (!order) {
@@ -39,9 +46,32 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // Strict amount reconciliation: incoming amount in paisa must match order total
+    if (order.totalAmountPaisa > 0 && amountPaisa !== order.totalAmountPaisa) {
+      await repo.recordOrderEvent(
+        order.id,
+        'PAYMENT_AMOUNT_MISMATCH',
+        `Payment amount mismatch: expected ${order.totalAmountPaisa} paisa, received ${amountPaisa} paisa`,
+        {
+          expectedPaisa: order.totalAmountPaisa,
+          receivedPaisa: amountPaisa,
+          transactionId,
+          provider,
+        }
+      );
+
+      return NextResponse.json(
+        {
+          error: `Payment amount mismatch: expected ${order.totalAmountPaisa} paisa, received ${amountPaisa} paisa`,
+          orderId: order.id,
+        },
+        { status: 400 }
+      );
+    }
+
     const conv = await repo.getConversation(order.customerPhone);
 
-    // Case 1: Standard Payment for Active Pending Order (or AWAITING_PAYMENT)
+    // Case 1: Standard Payment for Active Pending Order (or AWAITING_PAYMENT / CONFIGURING / RECEIVED)
     if (order.status === 'AWAITING_PAYMENT' || order.status === 'CONFIGURING' || order.status === 'RECEIVED') {
       const { order: updatedOrder, job, isDuplicate } = await repo.simulateVerifiedPayment(
         order.id,
@@ -55,8 +85,9 @@ export async function POST(req: NextRequest) {
           success: true,
           message: 'Payment already processed idempotently',
           orderId: updatedOrder.id,
-          jobId: job.id,
+          jobId: job?.id,
           status: updatedOrder.status,
+          isDuplicate: true,
         });
       }
 
@@ -67,7 +98,7 @@ export async function POST(req: NextRequest) {
           {
             ...conv.sessionData,
             orderId: updatedOrder.id,
-            jobId: job.id,
+            jobId: job?.id,
             paymentStatus: 'PAID',
           },
           updatedOrder.id,
@@ -89,7 +120,7 @@ export async function POST(req: NextRequest) {
         success: true,
         message: 'Payment accepted and order queued',
         orderId: updatedOrder.id,
-        jobId: job.id,
+        jobId: job?.id,
         status: 'QUEUED',
       });
     }
@@ -114,7 +145,7 @@ export async function POST(req: NextRequest) {
             {
               ...conv.sessionData,
               orderId: updatedOrder.id,
-              jobId: job.id,
+              jobId: job?.id,
               paymentStatus: 'PAID',
             },
             updatedOrder.id,
@@ -136,7 +167,7 @@ export async function POST(req: NextRequest) {
           success: true,
           message: 'Late payment accepted and order resurrected',
           orderId: updatedOrder.id,
-          jobId: job.id,
+          jobId: job?.id,
           status: 'QUEUED',
         });
       } else {
@@ -208,12 +239,13 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // If order was already paid / queued
+    // If order was already paid / queued / completed
     return NextResponse.json({
       success: true,
       message: `Payment already processed for order in status ${order.status}`,
       orderId: order.id,
       status: order.status,
+      isDuplicate: true,
     });
   } catch (err: unknown) {
     console.error('[Payment Webhook Error]:', err);
