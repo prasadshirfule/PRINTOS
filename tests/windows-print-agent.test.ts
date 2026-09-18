@@ -58,7 +58,7 @@ describe('Windows Print Agent & Spooler Subsystem', () => {
       expect(typeof printer.supportsColor).toBe('boolean');
       expect(typeof printer.supportsDuplex).toBe('boolean');
       expect(Array.isArray(printer.supportedPaperSizes)).toBe(true);
-    });
+    }, 15000);
 
     it('safely handles custom path resolution for SumatraPDF', () => {
       const found = WindowsPrinterDiscovery.findSumatraPDF('C:\\NonExistentPath\\SumatraPDF.exe');

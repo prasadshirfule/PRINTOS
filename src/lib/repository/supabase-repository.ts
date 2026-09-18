@@ -1,6 +1,8 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
 import {
+  Shop,
+  DEFAULT_SHOP_ID,
   PrintOrder,
   PrintJob,
   PrintOrderEvent,
@@ -43,12 +45,64 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
     });
   }
 
+  // --------------------------------------------------------------------------
+  // Shop Tenant Management
+  // --------------------------------------------------------------------------
+  public async getShop(shopId: string): Promise<Shop | null> {
+    const { data, error } = await this.supabase
+      .from('shops')
+      .select('*')
+      .eq('id', shopId)
+      .maybeSingle();
+
+    if (error) {
+      throw new Error(`Supabase getShop failed: ${error.message}`);
+    }
+    return data ? this.mapShop(data) : null;
+  }
+
+  public async listShops(): Promise<Shop[]> {
+    const { data, error } = await this.supabase
+      .from('shops')
+      .select('*')
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      throw new Error(`Supabase listShops failed: ${error.message}`);
+    }
+    return (data || []).map((row) => this.mapShop(row));
+  }
+
+  public async createShop(shop: Shop): Promise<Shop> {
+    const { data, error } = await this.supabase
+      .from('shops')
+      .insert({
+        id: shop.id,
+        name: shop.name,
+        slug: shop.slug,
+        phone: shop.phone || null,
+        address: shop.address || null,
+        currency: shop.currency || 'INR',
+        is_active: shop.isActive ?? true,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      throw new Error(`Supabase createShop failed: ${error.message}`);
+    }
+    return this.mapShop(data);
+  }
+
+  // --------------------------------------------------------------------------
+  // Order Operations
+  // --------------------------------------------------------------------------
   public async createOrder(order: PrintOrder): Promise<PrintOrder> {
     const { data, error } = await this.supabase
       .from('print_orders')
       .insert({
         id: order.id,
-        shop_id: order.shopId || null,
+        shop_id: order.shopId || DEFAULT_SHOP_ID,
         order_number: order.orderNumber,
         customer_phone: order.customerPhone,
         customer_name: order.customerName || null,
@@ -83,6 +137,7 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
       filename: order.originalFilename,
       fileSize: order.fileSize,
       pageCount: order.pageCount,
+      shopId: order.shopId || DEFAULT_SHOP_ID,
     });
 
     return this.mapOrder(data);
@@ -114,12 +169,15 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
     return data ? this.mapOrder(data) : null;
   }
 
-  public async listOrders(filters?: { status?: OrderStatus; limit?: number }): Promise<PrintOrder[]> {
+  public async listOrders(filters?: { status?: OrderStatus; limit?: number; shopId?: string }): Promise<PrintOrder[]> {
     let query = this.supabase
       .from('print_orders')
       .select('*')
       .order('created_at', { ascending: false });
 
+    if (filters?.shopId) {
+      query = query.eq('shop_id', filters.shopId);
+    }
     if (filters?.status) {
       query = query.eq('status', filters.status);
     }
@@ -152,9 +210,9 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
 
     if (nextStatus === 'PAID') updatePayload.paid_at = now;
     if (nextStatus === 'QUEUED') updatePayload.queued_at = now;
-    if (nextStatus === 'PRINTING' && !existing.startedAt) updatePayload.started_at = now;
+    if (nextStatus === 'PRINTING') updatePayload.started_at = now;
     if (nextStatus === 'COMPLETED') updatePayload.completed_at = now;
-    if (nextStatus === 'FAILED') updatePayload.failed_at = now;
+    if (nextStatus === 'FAILED' || nextStatus === 'CANCELLED') updatePayload.failed_at = now;
 
     const { data, error } = await this.supabase
       .from('print_orders')
@@ -169,7 +227,7 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
 
     await this.recordOrderEvent(
       orderId,
-      `STATUS_CHANGE_${nextStatus}`,
+      `STATUS_${nextStatus}`,
       `Order status transitioned from ${prevStatus} to ${nextStatus}`,
       metadata
     );
@@ -177,6 +235,9 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
     return this.mapOrder(data);
   }
 
+  // --------------------------------------------------------------------------
+  // Audit Events
+  // --------------------------------------------------------------------------
   public async recordOrderEvent(
     orderId: string,
     eventType: string,
@@ -203,7 +264,7 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
       orderId: data.order_id,
       eventType: data.event_type,
       message: data.message,
-      metadata: data.metadata,
+      metadata: data.metadata || {},
       createdAt: data.created_at,
     };
   }
@@ -224,15 +285,18 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
       orderId: row.order_id,
       eventType: row.event_type,
       message: row.message,
-      metadata: row.metadata,
+      metadata: row.metadata || {},
       createdAt: row.created_at,
     }));
   }
 
+  // --------------------------------------------------------------------------
+  // Payment & Idempotency
+  // --------------------------------------------------------------------------
   public async simulateVerifiedPayment(
     orderId: string,
     transactionId: string,
-    provider = 'MOCK_UPI',
+    provider = 'UPI_QR',
     amountPaisa?: number
   ): Promise<{ order: PrintOrder; job: PrintJob; isDuplicate: boolean }> {
     const order = await this.getOrder(orderId);
@@ -242,11 +306,10 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
 
     if (amountPaisa !== undefined && amountPaisa !== order.totalAmountPaisa) {
       throw new Error(
-        `Payment verification failed: Gateway amount (${amountPaisa} paisa) does not match order amount (${order.totalAmountPaisa} paisa).`
+        `Payment amount mismatch: expected ${order.totalAmountPaisa} paisa, received ${amountPaisa} paisa`
       );
     }
 
-    // Check existing transaction for idempotency
     const { data: existingTx } = await this.supabase
       .from('payment_transactions')
       .select('*')
@@ -262,8 +325,8 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
       return { order, job: existingJob, isDuplicate: true };
     }
 
-    // Insert transaction row with unique constraint (provider, transaction_id)
     const { error: txError } = await this.supabase.from('payment_transactions').insert({
+      shop_id: order.shopId || DEFAULT_SHOP_ID,
       order_id: orderId,
       provider,
       transaction_id: transactionId,
@@ -275,7 +338,6 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
     });
 
     if (txError) {
-      // If code 23505 (unique_violation), duplicate webhook occurred concurrently
       if (txError.code === '23505') {
         const existingJob = await this.getJobByOrderId(orderId);
         if (existingJob) {
@@ -285,20 +347,18 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
       throw new Error(`Failed to record payment transaction: ${txError.message}`);
     }
 
-    // Update order status to PAID
     await this.updateOrderStatus(orderId, 'PAID', { transactionId, provider });
     await this.supabase
       .from('print_orders')
       .update({ payment_status: 'PAID', payment_id: transactionId })
       .eq('id', orderId);
 
-    // Update order status to QUEUED
     await this.updateOrderStatus(orderId, 'QUEUED');
 
-    // Create print job with unique constraint on order_id
     const { data: jobData, error: jobError } = await this.supabase
       .from('print_jobs')
       .insert({
+        shop_id: order.shopId || DEFAULT_SHOP_ID,
         order_id: order.id,
         printer_id: order.printerId || null,
         agent_id: null,
@@ -331,6 +391,7 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
     await this.recordOrderEvent(orderId, 'PRINT_QUEUED', 'Print job added to printer queue', {
       jobId: jobData.id,
       printerId: jobData.printer_id,
+      shopId: jobData.shop_id,
     });
 
     const updatedOrder = (await this.getOrder(orderId)) || order;
@@ -363,12 +424,15 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
     return data ? this.mapJob(data) : null;
   }
 
-  public async listJobs(filters?: { status?: JobStatus; limit?: number }): Promise<PrintJob[]> {
+  public async listJobs(filters?: { status?: JobStatus; limit?: number; shopId?: string }): Promise<PrintJob[]> {
     let query = this.supabase
       .from('print_jobs')
       .select('*')
       .order('created_at', { ascending: false });
 
+    if (filters?.shopId) {
+      query = query.eq('shop_id', filters.shopId);
+    }
     if (filters?.status) {
       query = query.eq('status', filters.status);
     }
@@ -386,10 +450,11 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
   /**
    * Atomic queue claiming via PostgreSQL RPC using FOR UPDATE SKIP LOCKED
    */
-  public async claimNextPrintJob(agentId: string, printerId?: string): Promise<ClaimedJob | null> {
+  public async claimNextPrintJob(agentId: string, printerId?: string, shopId?: string): Promise<ClaimedJob | null> {
     const { data, error } = await this.supabase.rpc('claim_next_print_job', {
       p_agent_id: agentId,
       p_printer_id: printerId || null,
+      p_shop_id: shopId || null,
     });
 
     if (error) {
@@ -427,7 +492,6 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
       throw new ResourceNotFoundError('Job', jobId);
     }
 
-    // Strict Authorization: only claiming agent can mutate job
     if (job.agentId && job.agentId !== agentId) {
       throw new UnauthorizedAgentJobError(agentId, jobId);
     }
@@ -517,7 +581,6 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
       throw new Error(`Supabase recordAgentHeartbeat failed: ${error.message}`);
     }
 
-    // Update printer last_seen_at
     await this.supabase
       .from('printers')
       .update({ status: printerStatus, last_seen_at: now })
@@ -526,8 +589,12 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
     return this.mapAgent(data);
   }
 
-  public async listPrinters(): Promise<Printer[]> {
-    const { data, error } = await this.supabase.from('printers').select('*');
+  public async listPrinters(filters?: { shopId?: string }): Promise<Printer[]> {
+    let query = this.supabase.from('printers').select('*');
+    if (filters?.shopId) {
+      query = query.eq('shop_id', filters.shopId);
+    }
+    const { data, error } = await query;
     if (error) {
       throw new Error(`Supabase listPrinters failed: ${error.message}`);
     }
@@ -551,8 +618,8 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
     });
   }
 
-  public async getDashboardMetrics(): Promise<DashboardMetrics> {
-    const orders = await this.listOrders();
+  public async getDashboardMetrics(shopId?: string): Promise<DashboardMetrics> {
+    const orders = await this.listOrders({ shopId });
     const queuedCount = orders.filter((o) => o.status === 'QUEUED').length;
     const printingCount = orders.filter((o) => o.status === 'PRINTING').length;
     const completedCount = orders.filter((o) => o.status === 'COMPLETED').length;
@@ -575,85 +642,20 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
     };
   }
 
-  private mapOrder(row: any): PrintOrder {
-    return {
-      id: row.id,
-      shopId: row.shop_id,
-      orderNumber: row.order_number,
-      customerPhone: row.customer_phone,
-      customerName: row.customer_name,
-      status: row.status,
-      originalFilename: row.original_filename,
-      storagePath: row.storage_path,
-      fileType: row.file_type,
-      fileSize: row.file_size,
-      pageCount: row.page_count,
-      paperSize: row.paper_size,
-      colorMode: row.color_mode,
-      printSides: row.print_sides,
-      copies: row.copies,
-      pageSelection: row.page_selection,
-      selectedPageCount: row.selected_page_count,
-      subtotalPaisa: row.subtotal_paisa,
-      discountPaisa: row.discount_paisa,
-      totalAmountPaisa: row.total_amount_paisa,
-      currency: row.currency,
-      paymentStatus: row.payment_status,
-      paymentId: row.payment_id,
-      printerId: row.printer_id,
-      createdAt: row.created_at,
-      paidAt: row.paid_at,
-      queuedAt: row.queued_at,
-      startedAt: row.started_at,
-      completedAt: row.completed_at,
-      failedAt: row.failed_at,
-    };
-  }
-
-  private mapJob(row: any): PrintJob {
-    return {
-      id: row.id,
-      orderId: row.order_id,
-      printerId: row.printer_id,
-      agentId: row.agent_id,
-      status: row.status,
-      priority: row.priority,
-      attemptCount: row.attempt_count,
-      maxAttempts: row.max_attempts,
-      documentUrl: row.document_url,
-      printOptions: row.print_options,
-      errorMessage: row.error_message,
-      createdAt: row.created_at,
-      claimedAt: row.claimed_at,
-      startedAt: row.started_at,
-      completedAt: row.completed_at,
-      failedAt: row.failed_at,
-    };
-  }
-
-  private mapAgent(row: any): PrintAgent {
-    return {
-      id: row.id,
-      shopId: row.shop_id,
-      agentName: row.agent_name,
-      apiKeyHash: row.api_key_hash,
-      status: row.status,
-      version: row.version,
-      capabilities: row.capabilities || {},
-      lastSeenAt: row.last_seen_at,
-      createdAt: row.created_at,
-    };
-  }
-
   // --------------------------------------------------------------------------
   // Phase 2: WhatsApp Conversations & Locking
   // --------------------------------------------------------------------------
-  public async getConversation(customerPhone: string): Promise<WhatsAppConversation | null> {
-    const { data, error } = await this.supabase
+  public async getConversation(customerPhone: string, shopId?: string): Promise<WhatsAppConversation | null> {
+    let query = this.supabase
       .from('whatsapp_conversations')
       .select('*')
-      .eq('customer_phone', customerPhone)
-      .maybeSingle();
+      .eq('customer_phone', customerPhone);
+
+    if (shopId) {
+      query = query.eq('shop_id', shopId);
+    }
+
+    const { data, error } = await query.maybeSingle();
 
     if (error) {
       throw new Error(`Supabase getConversation failed: ${error.message}`);
@@ -663,15 +665,16 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
   }
 
   public async upsertConversation(
-    conversation: Partial<WhatsAppConversation> & { customerPhone: string }
+    conversation: Partial<WhatsAppConversation> & { customerPhone: string; shopId?: string | null }
   ): Promise<WhatsAppConversation> {
-    const existing = await this.getConversation(conversation.customerPhone);
+    const existing = await this.getConversation(conversation.customerPhone, conversation.shopId || undefined);
     const now = new Date().toISOString();
 
     if (existing) {
       const { data, error } = await this.supabase
         .from('whatsapp_conversations')
         .update({
+          shop_id: conversation.shopId || existing.shopId || DEFAULT_SHOP_ID,
           customer_name: conversation.customerName !== undefined ? conversation.customerName : existing.customerName,
           current_state: conversation.currentState || existing.currentState,
           active_order_id: conversation.activeOrderId !== undefined ? conversation.activeOrderId : existing.activeOrderId,
@@ -693,6 +696,7 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
       .from('whatsapp_conversations')
       .insert({
         id: conversation.id || crypto.randomUUID(),
+        shop_id: conversation.shopId || DEFAULT_SHOP_ID,
         customer_phone: conversation.customerPhone,
         customer_name: conversation.customerName || null,
         current_state: conversation.currentState || 'IDLE',
@@ -715,9 +719,10 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
     nextState: ConversationState,
     sessionData?: ConversationSessionData,
     activeOrderId?: string | null,
-    expectedVersion?: number
+    expectedVersion?: number,
+    shopId?: string
   ): Promise<WhatsAppConversation> {
-    const existing = await this.getConversation(customerPhone);
+    const existing = await this.getConversation(customerPhone, shopId);
     if (!existing) {
       throw new ResourceNotFoundError('Conversation', customerPhone);
     }
@@ -736,6 +741,10 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
         last_interaction_at: new Date().toISOString(),
       })
       .eq('customer_phone', customerPhone);
+
+    if (shopId) {
+      query = query.eq('shop_id', shopId);
+    }
 
     if (expectedVersion !== undefined) {
       query = query.eq('version', expectedVersion);
@@ -759,10 +768,12 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
     messageId: string;
     senderPhone: string;
     rawPayload: Record<string, unknown>;
+    shopId?: string;
   }): Promise<{ item: WhatsAppInboxItem; isDuplicate: boolean }> {
     const { data, error } = await this.supabase
       .from('whatsapp_inbox')
       .insert({
+        shop_id: item.shopId || DEFAULT_SHOP_ID,
         message_id: item.messageId,
         sender_phone: item.senderPhone,
         raw_payload: item.rawPayload,
@@ -904,10 +915,12 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
     recipientPhone: string;
     messageType: OutboxMessageType;
     payload: WhatsAppOutboxPayload;
+    shopId?: string;
   }): Promise<WhatsAppOutboxItem> {
     const { data, error } = await this.supabase
       .from('whatsapp_outbox')
       .insert({
+        shop_id: item.shopId || DEFAULT_SHOP_ID,
         conversation_id: item.conversationId || null,
         order_id: item.orderId || null,
         recipient_phone: item.recipientPhone,
@@ -1107,11 +1120,97 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
   }
 
   // --------------------------------------------------------------------------
-  // Phase 2: Mappers
+  // Mappers
   // --------------------------------------------------------------------------
+  private mapShop(row: any): Shop {
+    return {
+      id: row.id,
+      name: row.name,
+      slug: row.slug,
+      phone: row.phone,
+      address: row.address,
+      currency: row.currency || 'INR',
+      isActive: row.is_active ?? true,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  private mapOrder(row: any): PrintOrder {
+    return {
+      id: row.id,
+      shopId: row.shop_id,
+      orderNumber: row.order_number,
+      customerPhone: row.customer_phone,
+      customerName: row.customer_name,
+      status: row.status,
+      originalFilename: row.original_filename,
+      storagePath: row.storage_path,
+      fileType: row.file_type,
+      fileSize: row.file_size,
+      pageCount: row.page_count,
+      paperSize: row.paper_size,
+      colorMode: row.color_mode,
+      printSides: row.print_sides,
+      copies: row.copies,
+      pageSelection: row.page_selection,
+      selectedPageCount: row.selected_page_count,
+      subtotalPaisa: row.subtotal_paisa,
+      discountPaisa: row.discount_paisa,
+      totalAmountPaisa: row.total_amount_paisa,
+      currency: row.currency,
+      paymentStatus: row.payment_status,
+      paymentId: row.payment_id,
+      printerId: row.printer_id,
+      createdAt: row.created_at,
+      paidAt: row.paid_at,
+      queuedAt: row.queued_at,
+      startedAt: row.started_at,
+      completedAt: row.completed_at,
+      failedAt: row.failed_at,
+    };
+  }
+
+  private mapJob(row: any): PrintJob {
+    return {
+      id: row.id,
+      shopId: row.shop_id,
+      orderId: row.order_id,
+      printerId: row.printer_id,
+      agentId: row.agent_id,
+      status: row.status,
+      priority: row.priority,
+      attemptCount: row.attempt_count,
+      maxAttempts: row.max_attempts,
+      documentUrl: row.document_url,
+      printOptions: row.print_options,
+      errorMessage: row.error_message,
+      createdAt: row.created_at,
+      claimedAt: row.claimed_at,
+      startedAt: row.started_at,
+      completedAt: row.completed_at,
+      failedAt: row.failed_at,
+    };
+  }
+
+  private mapAgent(row: any): PrintAgent {
+    return {
+      id: row.id,
+      shopId: row.shop_id,
+      agentName: row.agent_name,
+      apiKeyHash: row.api_key_hash,
+      status: row.status,
+      version: row.version,
+      capabilities: row.capabilities || {},
+      lastSeenAt: row.last_seen_at,
+      createdAt: row.created_at,
+    };
+  }
+
   private mapConversation(row: any): WhatsAppConversation {
     return {
       id: row.id,
+      shopId: row.shop_id,
       customerPhone: row.customer_phone,
       customerName: row.customer_name,
       currentState: row.current_state,
@@ -1127,6 +1226,7 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
   private mapInboxItem(row: any): WhatsAppInboxItem {
     return {
       id: row.id,
+      shopId: row.shop_id,
       messageId: row.message_id,
       senderPhone: row.sender_phone,
       rawPayload: row.raw_payload || {},
@@ -1145,6 +1245,7 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
   private mapOutboxItem(row: any): WhatsAppOutboxItem {
     return {
       id: row.id,
+      shopId: row.shop_id,
       conversationId: row.conversation_id,
       orderId: row.order_id,
       recipientPhone: row.recipient_phone,

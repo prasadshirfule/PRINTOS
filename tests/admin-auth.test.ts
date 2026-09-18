@@ -9,6 +9,7 @@ import {
 import { POST as loginHandler } from '@/app/api/admin/auth/login/route';
 import { POST as logoutHandler } from '@/app/api/admin/auth/logout/route';
 import { GET as meHandler } from '@/app/api/admin/auth/me/route';
+import { DEFAULT_SHOP_ID } from '@/types/printos';
 
 describe('Admin Authentication & Session Protection', () => {
   const originalAdminEmail = process.env.ADMIN_EMAIL;
@@ -26,7 +27,7 @@ describe('Admin Authentication & Session Protection', () => {
 
   describe('Token Signing & Cryptographic Verification', () => {
     it('creates a signed token and verifies valid session payload', async () => {
-      const user = { id: 'u1', email: 'staff@shop.com', role: 'admin' as const };
+      const user = { id: 'u1', email: 'staff@shop.com', role: 'admin' as const, shopId: DEFAULT_SHOP_ID };
       const token = await createAdminToken(user, 3600);
 
       expect(typeof token).toBe('string');
@@ -36,10 +37,11 @@ describe('Admin Authentication & Session Protection', () => {
       expect(result.valid).toBe(true);
       expect(result.user?.email).toBe('staff@shop.com');
       expect(result.user?.role).toBe('admin');
+      expect(result.user?.shopId).toBe(DEFAULT_SHOP_ID);
     });
 
     it('rejects tampered token signatures', async () => {
-      const user = { id: 'u1', email: 'staff@shop.com', role: 'admin' as const };
+      const user = { id: 'u1', email: 'staff@shop.com', role: 'admin' as const, shopId: DEFAULT_SHOP_ID };
       const token = await createAdminToken(user, 3600);
       const [payload] = token.split('.');
       const tamperedToken = `${payload}.invalid_tampered_signature`;
@@ -50,7 +52,7 @@ describe('Admin Authentication & Session Protection', () => {
     });
 
     it('rejects expired tokens', async () => {
-      const user = { id: 'u1', email: 'staff@shop.com', role: 'admin' as const };
+      const user = { id: 'u1', email: 'staff@shop.com', role: 'admin' as const, shopId: DEFAULT_SHOP_ID };
       // Expired 10 seconds ago
       const expiredToken = await createAdminToken(user, -10);
 
@@ -66,6 +68,7 @@ describe('Admin Authentication & Session Protection', () => {
       expect(res.success).toBe(true);
       expect(res.token).toBeDefined();
       expect(res.user?.email).toBe('admin@printos.local');
+      expect(res.user?.shopId).toBe(DEFAULT_SHOP_ID);
     });
 
     it('rejects invalid password', async () => {
@@ -119,7 +122,7 @@ describe('Admin Authentication & Session Protection', () => {
     });
 
     it('me route returns user profile when authenticated via session cookie', async () => {
-      const user = { id: 'u1', email: 'admin@printos.local', role: 'admin' as const };
+      const user = { id: 'u1', email: 'admin@printos.local', role: 'admin' as const, shopId: DEFAULT_SHOP_ID };
       const token = await createAdminToken(user, 3600);
 
       const req = new NextRequest('http://localhost:3000/api/admin/auth/me', {
@@ -132,6 +135,7 @@ describe('Admin Authentication & Session Protection', () => {
       const data = await res.json();
       expect(data.authenticated).toBe(true);
       expect(data.user.email).toBe('admin@printos.local');
+      expect(data.user.shopId).toBe(DEFAULT_SHOP_ID);
     });
   });
 });

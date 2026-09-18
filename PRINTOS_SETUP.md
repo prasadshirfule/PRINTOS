@@ -30,6 +30,9 @@ Create a `.env.local` file in the root directory:
 NEXT_PUBLIC_APP_URL="http://localhost:3000"
 NODE_ENV="development"
 
+# Multi-Shop / Tenant Configuration
+# DEFAULT_SHOP_ID="00000000-0000-0000-0000-000000000001"
+
 # Admin Authentication & Security
 ADMIN_EMAIL="admin@printos.local"
 ADMIN_PASSWORD="admin123"
@@ -65,7 +68,18 @@ PRINT_AGENT_MOCK_FAILURE="false"
 
 ---
 
-## 4. Admin Portal & Authentication
+## 4. Multi-Shop / Multi-Tenancy Architecture
+
+PRINTOS natively supports **Multi-Shop Tenant Isolation**:
+- **Tenant Scope**: Every core entity (`print_orders`, `print_jobs`, `printers`, `print_agents`, `print_settings`, `whatsapp_conversations`) is scoped by `shop_id`.
+- **Database Row Level Security (RLS)**: Enforced via `00004_multi_shop_schema.sql` on Supabase / PostgreSQL.
+- **Default Flagship Shop**: For seamless single-shop development and local testing, PRINTOS bootstraps `DEFAULT_SHOP_ID = '00000000-0000-0000-0000-000000000001'` (`PRINTOS Flagship Shop`).
+- **Admin Session Binding**: Admin session cookies carry the staff user's `shopId`. The admin dashboard automatically renders only metrics, print queues, orders, and hardware for the assigned shop.
+- **Agent Job Isolation**: When local Windows Print Agents claim jobs atomically via `/api/agent/jobs/claim`, jobs are strictly filtered by the agent's shop.
+
+---
+
+## 5. Admin Portal & Authentication
 
 The `/admin/*` portal is fully protected by Next.js middleware and signed session tokens stored in secure `httpOnly` cookies (`printos_admin_session`).
 
@@ -81,11 +95,12 @@ The `/admin/*` portal is fully protected by Next.js middleware and signed sessio
 For production deployments using Supabase:
 1. Navigate to your Supabase Dashboard ➔ **Authentication** ➔ **Users**.
 2. Click **Add User** (or `Invite User`) and create an admin account with staff email and password.
-3. PRINTOS automatically queries `supabase.auth.signInWithPassword` first, generating signed session cookies upon verification.
+3. To assign a specific shop to a staff member, include `"shop_id": "<shop-uuid>"` in `user_metadata`.
+4. PRINTOS automatically queries `supabase.auth.signInWithPassword` first, generating signed session cookies with the tenant's `shopId`.
 
 ---
 
-## 5. Running the Development Server
+## 6. Running the Development Server
 
 Start the Next.js application:
 ```powershell
@@ -101,7 +116,7 @@ Open your browser at:
 
 ---
 
-## 6. Running the Print Agent
+## 7. Running the Print Agent
 
 ### Production: Native Windows Print Agent
 Runs on the shop Windows PC connected to physical USB/LAN printers:
@@ -121,7 +136,7 @@ npm run agent:mock:fail
 
 ---
 
-## 7. Running Cron Maintenance Jobs
+## 8. Running Cron Maintenance Jobs
 
 PRINTOS includes automated cron endpoints protected by `CRON_SECRET`:
 
@@ -137,9 +152,9 @@ curl -X POST "http://localhost:3000/api/cron/cleanup?retentionHours=24" -H "Auth
 
 ---
 
-## 8. Running Tests & Quality Checks
+## 9. Running Tests & Quality Checks
 
-Run the full Vitest automated test suite (20 test files, 111 tests):
+Run the full Vitest automated test suite (21 test files, 116 tests):
 ```powershell
 npm test
 ```

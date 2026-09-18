@@ -1,13 +1,29 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { LogOut } from 'lucide-react';
+import { LogOut, Store } from 'lucide-react';
 
 export function AdminHeader() {
   const pathname = usePathname();
   const router = useRouter();
+  const [shopName, setShopName] = useState<string>('Shop Hub');
+
+  useEffect(() => {
+    if (pathname === '/admin/login') return;
+
+    fetch('/api/admin/metrics')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.shop?.name) {
+          setShopName(data.shop.name);
+        }
+      })
+      .catch(() => {
+        // Fallback default
+      });
+  }, [pathname]);
 
   if (pathname === '/admin/login') {
     return null;
@@ -33,16 +49,17 @@ export function AdminHeader() {
   return (
     <header className="sticky top-0 z-30 border-b border-slate-200 bg-white shadow-sm">
       <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6 lg:px-8">
-        <div className="flex items-center space-x-4">
+        <div className="flex items-center space-x-3">
           <Link href="/admin" className="flex items-center space-x-2 text-xl font-bold text-slate-900">
             <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-white font-mono text-sm font-bold">
               P
             </span>
             <span>PRINTOS Admin</span>
           </Link>
-          <span className="rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700">
-            Shop PC Hub
-          </span>
+          <div className="flex items-center space-x-1 rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700">
+            <Store className="h-3 w-3" />
+            <span className="truncate max-w-[160px] sm:max-w-xs">{shopName}</span>
+          </div>
         </div>
 
         <div className="flex items-center space-x-2 sm:space-x-6">

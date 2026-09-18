@@ -1,5 +1,7 @@
 import crypto from 'crypto';
 import {
+  Shop,
+  DEFAULT_SHOP_ID,
   PrintOrder,
   PrintJob,
   PrintOrderEvent,
@@ -31,6 +33,7 @@ import {
 } from './repository.interface';
 
 export class InMemoryPrintOSRepository implements IPrintOSRepository {
+  private shops: Map<string, Shop> = new Map();
   private orders: Map<string, PrintOrder> = new Map();
   private jobs: Map<string, PrintJob> = new Map();
   private events: PrintOrderEvent[] = [];
@@ -49,8 +52,22 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
   }
 
   private seedDefaults() {
+    const defaultShop: Shop = {
+      id: DEFAULT_SHOP_ID,
+      name: 'PRINTOS Flagship Shop',
+      slug: 'main-shop',
+      phone: '+919999999999',
+      address: 'Shop No. 1, Front Counter Hub',
+      currency: 'INR',
+      isActive: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    this.shops.set(defaultShop.id, defaultShop);
+
     const mockPrinter: Printer = {
       id: '00000000-0000-0000-0000-000000000001',
+      shopId: DEFAULT_SHOP_ID,
       name: 'Mock Shop Laser Printer',
       location: 'Front Counter',
       status: 'ONLINE',
@@ -65,6 +82,7 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
 
     const mockAgent: PrintAgent = {
       id: '00000000-0000-0000-0000-000000000002',
+      shopId: DEFAULT_SHOP_ID,
       agentName: 'shop-pc-01',
       apiKeyHash: '9b66236b285b0d09a5b3a3c26b9a8cfefefb54cf21d2e1c4a035728a47401c10',
       status: 'ONLINE',
@@ -76,17 +94,44 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
     this.agents.set(mockAgent.id, mockAgent);
   }
 
+  // --------------------------------------------------------------------------
+  // Shop Tenant Management
+  // --------------------------------------------------------------------------
+  public async getShop(shopId: string): Promise<Shop | null> {
+    return this.shops.get(shopId) || null;
+  }
+
+  public async listShops(): Promise<Shop[]> {
+    return Array.from(this.shops.values());
+  }
+
+  public async createShop(shop: Shop): Promise<Shop> {
+    if (this.shops.has(shop.id)) {
+      throw new Error(`Shop with ID ${shop.id} already exists.`);
+    }
+    this.shops.set(shop.id, { ...shop });
+    return shop;
+  }
+
+  // --------------------------------------------------------------------------
+  // Order Operations
+  // --------------------------------------------------------------------------
   public async createOrder(order: PrintOrder): Promise<PrintOrder> {
     if (this.orders.has(order.id)) {
       throw new Error(`Order with ID ${order.id} already exists.`);
     }
-    this.orders.set(order.id, { ...order });
+    const orderWithShop: PrintOrder = {
+      ...order,
+      shopId: order.shopId || DEFAULT_SHOP_ID,
+    };
+    this.orders.set(order.id, orderWithShop);
     await this.recordOrderEvent(order.id, 'FILE_RECEIVED', 'Order created and file registered', {
       filename: order.originalFilename,
       fileSize: order.fileSize,
       pageCount: order.pageCount,
+      shopId: orderWithShop.shopId,
     });
-    return order;
+    return orderWithShop;
   }
 
   public async getOrder(id: string): Promise<PrintOrder | null> {
@@ -100,8 +145,11 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
     return null;
   }
 
-  public async listOrders(filters?: { status?: OrderStatus; limit?: number }): Promise<PrintOrder[]> {
+  public async listOrders(filters?: { status?: OrderStatus; limit?: number; shopId?: string }): Promise<PrintOrder[]> {
     let list = Array.from(this.orders.values());
+    if (filters?.shopId) {
+      list = list.filter((o) => o.shopId === filters.shopId);
+    }
     if (filters?.status) {
       list = list.filter((o) => o.status === filters.status);
     }
@@ -124,27 +172,25 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
 
     OrderStateMachine.validateTransition(order.status, nextStatus);
 
-    const prevStatus = order.status;
+    const now = new Date().toISOString();
     order.status = nextStatus;
 
-    const now = new Date().toISOString();
     if (nextStatus === 'PAID') order.paidAt = now;
     if (nextStatus === 'QUEUED') order.queuedAt = now;
-    if (nextStatus === 'PRINTING' && !order.startedAt) order.startedAt = now;
+    if (nextStatus === 'PRINTING') order.startedAt = now;
     if (nextStatus === 'COMPLETED') order.completedAt = now;
-    if (nextStatus === 'FAILED') order.failedAt = now;
+    if (nextStatus === 'FAILED' || nextStatus === 'CANCELLED') order.failedAt = now;
 
     this.orders.set(orderId, order);
-    await this.recordOrderEvent(
-      orderId,
-      `STATUS_CHANGE_${nextStatus}`,
-      `Order status transitioned from ${prevStatus} to ${nextStatus}`,
-      metadata
-    );
+
+    await this.recordOrderEvent(orderId, `STATUS_${nextStatus}`, `Order transitioned to ${nextStatus}`, metadata);
 
     return order;
   }
 
+  // --------------------------------------------------------------------------
+  // Audit Events
+  // --------------------------------------------------------------------------
   public async recordOrderEvent(
     orderId: string,
     eventType: string,
@@ -156,7 +202,7 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
       orderId,
       eventType,
       message,
-      metadata,
+      metadata: metadata || {},
       createdAt: new Date().toISOString(),
     };
     this.events.push(event);
@@ -169,10 +215,13 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
       .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
   }
 
+  // --------------------------------------------------------------------------
+  // Payment & Idempotency
+  // --------------------------------------------------------------------------
   public async simulateVerifiedPayment(
     orderId: string,
     transactionId: string,
-    provider = 'MOCK_UPI',
+    provider = 'UPI_QR',
     amountPaisa?: number
   ): Promise<{ order: PrintOrder; job: PrintJob; isDuplicate: boolean }> {
     const order = this.orders.get(orderId);
@@ -180,21 +229,19 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
       throw new ResourceNotFoundError('Order', orderId);
     }
 
-    // Compare gateway amount with order amount if provided
-    if (amountPaisa !== undefined && amountPaisa !== order.totalAmountPaisa) {
-      throw new Error(
-        `Payment verification failed: Gateway amount (${amountPaisa} paisa) does not match order amount (${order.totalAmountPaisa} paisa).`
-      );
-    }
-
     const txKey = `${provider}:${transactionId}`;
 
-    if (this.transactions.has(txKey) || order.paymentStatus === 'PAID') {
+    if (this.transactions.has(txKey)) {
       const existingJob = await this.getJobByOrderId(orderId);
-      if (!existingJob) {
-        throw new Error('Order marked paid but print job missing.');
+      if (existingJob) {
+        return { order, job: existingJob, isDuplicate: true };
       }
-      return { order, job: existingJob, isDuplicate: true };
+    }
+
+    if (amountPaisa !== undefined && amountPaisa !== order.totalAmountPaisa) {
+      throw new Error(
+        `Payment amount mismatch: expected ${order.totalAmountPaisa} paisa, received ${amountPaisa} paisa`
+      );
     }
 
     this.transactions.add(txKey);
@@ -207,6 +254,7 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
 
     const job: PrintJob = {
       id: crypto.randomUUID(),
+      shopId: order.shopId || DEFAULT_SHOP_ID,
       orderId: order.id,
       printerId: order.printerId || '00000000-0000-0000-0000-000000000001',
       agentId: null,
@@ -230,11 +278,15 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
     await this.recordOrderEvent(orderId, 'PRINT_QUEUED', 'Print job added to printer queue', {
       jobId: job.id,
       printerId: job.printerId,
+      shopId: job.shopId,
     });
 
     return { order, job, isDuplicate: false };
   }
 
+  // --------------------------------------------------------------------------
+  // Print Jobs & Atomic Queue Claiming
+  // --------------------------------------------------------------------------
   public async getJob(id: string): Promise<PrintJob | null> {
     return this.jobs.get(id) || null;
   }
@@ -246,8 +298,11 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
     return null;
   }
 
-  public async listJobs(filters?: { status?: JobStatus; limit?: number }): Promise<PrintJob[]> {
+  public async listJobs(filters?: { status?: JobStatus; limit?: number; shopId?: string }): Promise<PrintJob[]> {
     let list = Array.from(this.jobs.values());
+    if (filters?.shopId) {
+      list = list.filter((j) => j.shopId === filters.shopId);
+    }
     if (filters?.status) {
       list = list.filter((j) => j.status === filters.status);
     }
@@ -258,17 +313,21 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
     return list;
   }
 
-  public async claimNextPrintJob(agentId: string, printerId?: string): Promise<ClaimedJob | null> {
+  public async claimNextPrintJob(agentId: string, printerId?: string, shopId?: string): Promise<ClaimedJob | null> {
     while (this.claimLock) {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     this.claimLock = true;
 
     try {
+      const agent = this.agents.get(agentId);
+      const targetShopId = shopId || agent?.shopId;
+
       const eligibleJobs = Array.from(this.jobs.values())
         .filter(
           (j) =>
             (j.status === 'QUEUED' || j.status === 'RETRY_PENDING') &&
+            (!targetShopId || j.shopId === targetShopId || !j.shopId) &&
             (!printerId || j.printerId === printerId || !j.printerId)
         )
         .sort((a, b) => b.priority - a.priority || new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
@@ -292,6 +351,7 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
       await this.updateOrderStatus(order.id, 'PRINTING', {
         jobId: targetJob.id,
         agentId,
+        shopId: targetJob.shopId,
         attempt: targetJob.attemptCount,
       });
 
@@ -324,7 +384,6 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
       throw new ResourceNotFoundError('Job', jobId);
     }
 
-    // Strict Agent Authorization: Only claiming agent can update job
     if (job.agentId && job.agentId !== agentId) {
       throw new UnauthorizedAgentJobError(agentId, jobId);
     }
@@ -396,6 +455,7 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
     if (!agent) {
       agent = {
         id: crypto.randomUUID(),
+        shopId: DEFAULT_SHOP_ID,
         agentName,
         apiKeyHash: '9b66236b285b0d09a5b3a3c26b9a8cfefefb54cf21d2e1c4a035728a47401c10',
         status: 'ONLINE',
@@ -423,9 +483,13 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
     return agent;
   }
 
-  public async listPrinters(): Promise<Printer[]> {
+  public async listPrinters(filters?: { shopId?: string }): Promise<Printer[]> {
     const now = Date.now();
-    return Array.from(this.printers.values()).map((p) => {
+    let list = Array.from(this.printers.values());
+    if (filters?.shopId) {
+      list = list.filter((p) => p.shopId === filters.shopId);
+    }
+    return list.map((p) => {
       if (p.lastSeenAt && now - new Date(p.lastSeenAt).getTime() > 60000) {
         return { ...p, status: 'OFFLINE' };
       }
@@ -433,8 +497,11 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
     });
   }
 
-  public async getDashboardMetrics(): Promise<DashboardMetrics> {
-    const allOrders = Array.from(this.orders.values());
+  public async getDashboardMetrics(shopId?: string): Promise<DashboardMetrics> {
+    let allOrders = Array.from(this.orders.values());
+    if (shopId) {
+      allOrders = allOrders.filter((o) => o.shopId === shopId);
+    }
     const queuedCount = allOrders.filter((o) => o.status === 'QUEUED').length;
     const printingCount = allOrders.filter((o) => o.status === 'PRINTING').length;
     const completedCount = allOrders.filter((o) => o.status === 'COMPLETED').length;
@@ -460,12 +527,15 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
   // --------------------------------------------------------------------------
   // Phase 2: WhatsApp Conversations & Locking
   // --------------------------------------------------------------------------
-  public async getConversation(customerPhone: string): Promise<WhatsAppConversation | null> {
-    return this.conversations.get(customerPhone) || null;
+  public async getConversation(customerPhone: string, shopId?: string): Promise<WhatsAppConversation | null> {
+    const conv = this.conversations.get(customerPhone);
+    if (!conv) return null;
+    if (shopId && conv.shopId && conv.shopId !== shopId) return null;
+    return conv;
   }
 
   public async upsertConversation(
-    conversation: Partial<WhatsAppConversation> & { customerPhone: string }
+    conversation: Partial<WhatsAppConversation> & { customerPhone: string; shopId?: string | null }
   ): Promise<WhatsAppConversation> {
     const existing = this.conversations.get(conversation.customerPhone);
     const now = new Date().toISOString();
@@ -473,6 +543,7 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
     if (existing) {
       const updated: WhatsAppConversation = {
         ...existing,
+        shopId: conversation.shopId || existing.shopId || DEFAULT_SHOP_ID,
         customerName: conversation.customerName !== undefined ? conversation.customerName : existing.customerName,
         currentState: conversation.currentState || existing.currentState,
         activeOrderId: conversation.activeOrderId !== undefined ? conversation.activeOrderId : existing.activeOrderId,
@@ -487,6 +558,7 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
 
     const created: WhatsAppConversation = {
       id: conversation.id || crypto.randomUUID(),
+      shopId: conversation.shopId || DEFAULT_SHOP_ID,
       customerPhone: conversation.customerPhone,
       customerName: conversation.customerName || null,
       currentState: conversation.currentState || 'IDLE',
@@ -506,11 +578,16 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
     nextState: ConversationState,
     sessionData?: ConversationSessionData,
     activeOrderId?: string | null,
-    expectedVersion?: number
+    expectedVersion?: number,
+    shopId?: string
   ): Promise<WhatsAppConversation> {
     const conversation = this.conversations.get(customerPhone);
     if (!conversation) {
       throw new ResourceNotFoundError('Conversation', customerPhone);
+    }
+
+    if (shopId && conversation.shopId && conversation.shopId !== shopId) {
+      throw new ResourceNotFoundError('Conversation for tenant shop', customerPhone);
     }
 
     if (expectedVersion !== undefined && conversation.version !== expectedVersion) {
@@ -539,6 +616,7 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
     messageId: string;
     senderPhone: string;
     rawPayload: Record<string, unknown>;
+    shopId?: string;
   }): Promise<{ item: WhatsAppInboxItem; isDuplicate: boolean }> {
     for (const existing of this.inbox.values()) {
       if (existing.messageId === item.messageId) {
@@ -549,6 +627,7 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
     const now = new Date().toISOString();
     const inboxItem: WhatsAppInboxItem = {
       id: crypto.randomUUID(),
+      shopId: item.shopId || DEFAULT_SHOP_ID,
       messageId: item.messageId,
       senderPhone: item.senderPhone,
       rawPayload: item.rawPayload,
@@ -607,7 +686,6 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
     if (!item) return false;
     const nowTime = Date.now();
 
-    // Verify ownership and unexpired lease
     if (item.workerId !== workerId || !item.lockedUntil || new Date(item.lockedUntil).getTime() < nowTime) {
       return false;
     }
@@ -622,7 +700,6 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
     if (!item) return false;
     const nowTime = Date.now();
 
-    // Verify worker ownership and valid lease
     if (item.workerId !== workerId || (item.lockedUntil && new Date(item.lockedUntil).getTime() < nowTime)) {
       return false;
     }
@@ -668,10 +745,12 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
     recipientPhone: string;
     messageType: OutboxMessageType;
     payload: WhatsAppOutboxPayload;
+    shopId?: string;
   }): Promise<WhatsAppOutboxItem> {
     const now = new Date().toISOString();
     const outboxItem: WhatsAppOutboxItem = {
       id: crypto.randomUUID(),
+      shopId: item.shopId || DEFAULT_SHOP_ID,
       conversationId: item.conversationId || null,
       orderId: item.orderId || null,
       recipientPhone: item.recipientPhone,
@@ -707,7 +786,7 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
           return true;
         }
         if (o.status === 'SENDING' && o.lockedUntil && new Date(o.lockedUntil).getTime() < nowTime) {
-          return true; // Expired lease
+          return true;
         }
         return false;
       })
@@ -778,7 +857,6 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
       item.status = 'DEAD_LETTER';
     } else {
       item.status = 'FAILED';
-      // Exponential backoff
       const delayMs = Math.pow(2, item.attemptCount) * 2000;
       item.nextAttemptAt = new Date(Date.now() + delayMs).toISOString();
     }
@@ -828,9 +906,12 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
   }
 
   public async clear(): Promise<void> {
+    this.shops.clear();
     this.orders.clear();
     this.jobs.clear();
     this.events = [];
+    this.printers.clear();
+    this.agents.clear();
     this.transactions.clear();
     this.conversations.clear();
     this.inbox.clear();

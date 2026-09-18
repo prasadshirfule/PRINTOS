@@ -1,17 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getRepository } from '@/lib/repository';
 import { calculatePrintOrderPrice } from '@/lib/pricing/pricing-engine';
-import { PrintOrder, PaperSize, ColorMode, PrintSides, FileType } from '@/types/printos';
+import { PrintOrder, PaperSize, ColorMode, PrintSides, FileType, DEFAULT_SHOP_ID } from '@/types/printos';
 import { verifyAdminAuth } from '@/lib/auth/admin-auth';
 
 export async function GET(req: NextRequest) {
   const auth = await verifyAdminAuth(req);
-  if (!auth.authorized) {
+  if (!auth.authorized || !auth.user) {
     return NextResponse.json({ error: auth.error || 'Unauthorized' }, { status: 401 });
   }
 
   const repo = getRepository();
-  const orders = await repo.listOrders();
+  const orders = await repo.listOrders({ shopId: auth.user.shopId });
   return NextResponse.json({ orders });
 }
 
@@ -19,6 +19,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const {
+      shopId = DEFAULT_SHOP_ID,
       customerPhone,
       customerName,
       originalFilename = 'document.pdf',
@@ -52,6 +53,7 @@ export async function POST(req: NextRequest) {
 
     const order: PrintOrder = {
       id: orderId,
+      shopId,
       orderNumber,
       customerPhone,
       customerName,
@@ -78,6 +80,7 @@ export async function POST(req: NextRequest) {
     await repo.createOrder(order);
     await repo.recordOrderEvent(order.id, 'OPTIONS_SELECTED', 'Customer configured print options', {
       ...priceBreakdown,
+      shopId: order.shopId,
     });
     await repo.recordOrderEvent(order.id, 'PRICE_CALCULATED', `Total price: ${priceBreakdown.totalAmountFormatted}`, {
       totalAmountPaisa: priceBreakdown.totalAmountPaisa,

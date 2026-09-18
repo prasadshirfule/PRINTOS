@@ -28,7 +28,8 @@ PRINTOS includes a comprehensive unit, integration, and acceptance test suite wr
 | `tests/rate-limiter.test.ts` | Sliding window rate limiting and webhook abuse protection | 3 | PASS |
 | `tests/supabase-integration.test.ts` | Real Supabase database persistence and queue RPC checks | 1 | PASS |
 | `tests/admin-auth.test.ts` | Web Crypto HMAC token signing, tamper rejection, credentials & route guards | 10 | PASS |
-| **Total Automated Tests** | | **111** | **100% PASS** |
+| `tests/multi-tenant-isolation.test.ts` | Tenant shop isolation across orders, metrics, print queues, printers, and admin routes | 5 | PASS |
+| **Total Automated Tests** | | **116** | **100% PASS** |
 
 ---
 
@@ -41,8 +42,8 @@ npm test
 
 Expected Output:
 ```
- Test Files  20 passed (20)
-      Tests  111 passed (111)
+ Test Files  21 passed (21)
+      Tests  116 passed (116)
 ```
 
 To run tests in watch mode during development:

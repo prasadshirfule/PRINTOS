@@ -1,4 +1,5 @@
 import {
+  Shop,
   PrintOrder,
   PrintJob,
   PrintOrderEvent,
@@ -53,11 +54,16 @@ export class StaleConversationVersionError extends Error {
 }
 
 export interface IPrintOSRepository {
+  // Shop Tenant Management
+  getShop(shopId: string): Promise<Shop | null>;
+  listShops(): Promise<Shop[]>;
+  createShop(shop: Shop): Promise<Shop>;
+
   // Order operations
   createOrder(order: PrintOrder): Promise<PrintOrder>;
   getOrder(id: string): Promise<PrintOrder | null>;
   getOrderByNumber(orderNumber: string): Promise<PrintOrder | null>;
-  listOrders(filters?: { status?: OrderStatus; limit?: number }): Promise<PrintOrder[]>;
+  listOrders(filters?: { status?: OrderStatus; limit?: number; shopId?: string }): Promise<PrintOrder[]>;
   updateOrderStatus(
     orderId: string,
     nextStatus: OrderStatus,
@@ -84,8 +90,8 @@ export interface IPrintOSRepository {
   // Print Jobs & Atomic Queue Claiming
   getJob(id: string): Promise<PrintJob | null>;
   getJobByOrderId(orderId: string): Promise<PrintJob | null>;
-  listJobs(filters?: { status?: JobStatus; limit?: number }): Promise<PrintJob[]>;
-  claimNextPrintJob(agentId: string, printerId?: string): Promise<ClaimedJob | null>;
+  listJobs(filters?: { status?: JobStatus; limit?: number; shopId?: string }): Promise<PrintJob[]>;
+  claimNextPrintJob(agentId: string, printerId?: string, shopId?: string): Promise<ClaimedJob | null>;
   updateJobStatus(jobId: string, agentId: string, update: AgentJobStatusUpdate): Promise<PrintJob>;
 
   // Agents & Printers
@@ -96,20 +102,21 @@ export interface IPrintOSRepository {
     capabilities?: Record<string, unknown>,
     version?: string
   ): Promise<PrintAgent>;
-  listPrinters(): Promise<Printer[]>;
+  listPrinters(filters?: { shopId?: string }): Promise<Printer[]>;
 
   // Metrics
-  getDashboardMetrics(): Promise<DashboardMetrics>;
+  getDashboardMetrics(shopId?: string): Promise<DashboardMetrics>;
 
   // Phase 2: WhatsApp Conversations & Locking
-  getConversation(customerPhone: string): Promise<WhatsAppConversation | null>;
-  upsertConversation(conversation: Partial<WhatsAppConversation> & { customerPhone: string }): Promise<WhatsAppConversation>;
+  getConversation(customerPhone: string, shopId?: string): Promise<WhatsAppConversation | null>;
+  upsertConversation(conversation: Partial<WhatsAppConversation> & { customerPhone: string; shopId?: string | null }): Promise<WhatsAppConversation>;
   updateConversationState(
     customerPhone: string,
     nextState: ConversationState,
     sessionData?: ConversationSessionData,
     activeOrderId?: string | null,
-    expectedVersion?: number
+    expectedVersion?: number,
+    shopId?: string
   ): Promise<WhatsAppConversation>;
 
   // Phase 2: WhatsApp Inbox
@@ -117,6 +124,7 @@ export interface IPrintOSRepository {
     messageId: string;
     senderPhone: string;
     rawPayload: Record<string, unknown>;
+    shopId?: string;
   }): Promise<{ item: WhatsAppInboxItem; isDuplicate: boolean }>;
   claimInboxBatch(workerId: string, limit?: number, leaseSeconds?: number): Promise<WhatsAppInboxItem[]>;
   renewInboxLease(id: string, workerId: string, additionalSeconds?: number): Promise<boolean>;
@@ -130,6 +138,7 @@ export interface IPrintOSRepository {
     recipientPhone: string;
     messageType: OutboxMessageType;
     payload: WhatsAppOutboxPayload;
+    shopId?: string;
   }): Promise<WhatsAppOutboxItem>;
   claimOutboxBatch(workerId: string, limit?: number, leaseSeconds?: number): Promise<WhatsAppOutboxItem[]>;
   renewOutboxLease(id: string, workerId: string, additionalSeconds?: number): Promise<boolean>;

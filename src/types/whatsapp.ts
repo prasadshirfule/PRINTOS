@@ -44,6 +44,7 @@ export interface WhatsAppButton {
 }
 
 export interface ConversationSessionData {
+  shopId?: string;
   documentPath?: string;
   originalFilename?: string;
   fileType?: FileType;
@@ -67,6 +68,7 @@ export interface ConversationSessionData {
 
 export interface WhatsAppConversation {
   id: string;
+  shopId?: string | null;
   customerPhone: string;
   customerName?: string | null;
   currentState: ConversationState;
@@ -80,6 +82,7 @@ export interface WhatsAppConversation {
 
 export interface WhatsAppInboxItem {
   id: string;
+  shopId?: string | null;
   messageId: string; // Meta wamid
   senderPhone: string;
   rawPayload: Record<string, unknown>;
@@ -111,6 +114,7 @@ export interface WhatsAppOutboxPayload {
 
 export interface WhatsAppOutboxItem {
   id: string;
+  shopId?: string | null;
   conversationId?: string | null;
   orderId?: string | null;
   recipientPhone: string;

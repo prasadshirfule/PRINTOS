@@ -149,7 +149,11 @@ Detailed architecture specifications, setup manuals, and testing guidelines are 
   - Cryptographic Web Crypto HMAC session tokens with `httpOnly` cookie protection (`printos_admin_session`).
   - Seamless login portal (`/admin/login`) with Supabase Auth integration and local fallback credentials.
   - Staff header navigation with active session status and one-click logout.
-  - 100% passing test suite (20 test suites, 111 automated tests).
+- [x] **Multi-Shop / Multi-Tenancy Architecture**
+  - Full tenant isolation across orders, print jobs, hardware queues, and admin portals via `shop_id`.
+  - Supabase database Row Level Security (RLS) policies and tenant-aware atomic queue claiming.
+  - Multi-tenant admin authentication linking staff to specific print shop branches.
+  - 100% passing test suite (21 test suites, 116 automated tests).
 
 ---
 
@@ -240,7 +244,7 @@ npm run agent:mock:fail
 PRINTOS includes a complete test suite covering unit calculations, concurrency invariants, and end-to-end acceptance flows:
 
 ```bash
-# Run all Vitest test suites (20 test suites, 111 tests)
+# Run all Vitest test suites (21 test suites, 116 tests)
 npm test
 
 # Run Phase 1 End-to-End Acceptance Test

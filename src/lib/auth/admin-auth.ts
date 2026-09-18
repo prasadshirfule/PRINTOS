@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { DEFAULT_SHOP_ID } from '@/types/printos';
 
 export const ADMIN_COOKIE_NAME = 'printos_admin_session';
 
@@ -7,6 +8,7 @@ export interface AdminUser {
   id: string;
   email: string;
   role: 'admin' | 'staff';
+  shopId: string;
 }
 
 export interface AdminAuthResult {
@@ -47,6 +49,7 @@ export async function createAdminToken(user: AdminUser, expiresInSeconds = 86400
   const enc = new TextEncoder();
   const payload = {
     ...user,
+    shopId: user.shopId || DEFAULT_SHOP_ID,
     exp: Date.now() + expiresInSeconds * 1000,
   };
   const payloadBase64 = toBase64Url(enc.encode(JSON.stringify(payload)));
@@ -112,6 +115,7 @@ export async function verifyAdminToken(
         id: payload.id,
         email: payload.email,
         role: payload.role || 'admin',
+        shopId: payload.shopId || DEFAULT_SHOP_ID,
       },
     };
   } catch (err: unknown) {
@@ -127,7 +131,8 @@ export async function verifyAdminToken(
  */
 export async function authenticateAdminLogin(
   email: string,
-  password: string
+  password: string,
+  requestedShopId?: string
 ): Promise<{ success: boolean; token?: string; user?: AdminUser; error?: string }> {
   const normalizedEmail = email.trim().toLowerCase();
 
@@ -150,10 +155,13 @@ export async function authenticateAdminLogin(
       });
 
       if (!error && data.user) {
+        const userMetadata = data.user.user_metadata || {};
+        const shopId = requestedShopId || userMetadata.shop_id || DEFAULT_SHOP_ID;
         const user: AdminUser = {
           id: data.user.id,
           email: data.user.email || normalizedEmail,
           role: 'admin',
+          shopId,
         };
         const token = await createAdminToken(user);
         return { success: true, token, user };
@@ -172,6 +180,7 @@ export async function authenticateAdminLogin(
       id: 'local-admin-01',
       email: defaultEmail,
       role: 'admin',
+      shopId: requestedShopId || DEFAULT_SHOP_ID,
     };
     const token = await createAdminToken(user);
     return { success: true, token, user };
@@ -198,7 +207,7 @@ export async function verifyAdminAuth(req: NextRequest): Promise<AdminAuthResult
     if (devKey === 'dev-admin-secret') {
       return {
         authorized: true,
-        user: { id: 'dev-admin', email: 'admin@printos.local', role: 'admin' },
+        user: { id: 'dev-admin', email: 'admin@printos.local', role: 'admin', shopId: DEFAULT_SHOP_ID },
       };
     }
 

@@ -1,3 +1,17 @@
+export const DEFAULT_SHOP_ID = '00000000-0000-0000-0000-000000000001';
+
+export interface Shop {
+  id: string;
+  name: string;
+  slug: string;
+  phone?: string | null;
+  address?: string | null;
+  currency: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type OrderStatus =
   | 'RECEIVED'
   | 'CONFIGURING'
@@ -63,6 +77,7 @@ export interface PrintAgent {
 }
 
 export interface PricingConfig {
+  shopId?: string | null;
   defaultPaper: PaperSize;
   bwPricePaisa: number;          // e.g. 200 = ₹2.00
   colorPricePaisa: number;       // e.g. 1000 = ₹10.00
@@ -119,6 +134,7 @@ export interface PrintOrderEvent {
 
 export interface PrintJob {
   id: string;
+  shopId?: string | null;
   orderId: string;
   printerId?: string | null;
   agentId?: string | null;

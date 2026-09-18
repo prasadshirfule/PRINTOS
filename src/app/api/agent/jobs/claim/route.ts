@@ -22,8 +22,8 @@ export async function POST(req: NextRequest) {
       // Empty body is acceptable
     }
 
-    // Atomic claim through repository (PostgreSQL RPC in production)
-    const claimedJob = await repo.claimNextPrintJob(agent.id, printerId);
+    // Atomic claim through repository scoped to the agent's shop
+    const claimedJob = await repo.claimNextPrintJob(agent.id, printerId, agent.shopId || undefined);
 
     return NextResponse.json({
       ok: true,
