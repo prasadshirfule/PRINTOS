@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import dotenv from 'dotenv';
+dotenv.config({ path: '.env.local' });
 import { createClient } from '@supabase/supabase-js';
 import { SupabasePrintOSRepository } from '@/lib/repository/supabase-repository';
 import { PrintOrder } from '@/types/printos';
