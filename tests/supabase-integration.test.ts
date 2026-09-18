@@ -3,20 +3,25 @@ import { SupabasePrintOSRepository } from '@/lib/repository/supabase-repository'
 import { PrintOrder } from '@/types/printos';
 
 describe('Supabase PostgreSQL Real Integration Test', () => {
+  const isEnabled = process.env.SUPABASE_INTEGRATION_TEST === 'true';
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  const isConfigured =
+  const hasValidCredentials =
     Boolean(supabaseUrl && serviceRoleKey) &&
     !supabaseUrl?.includes('your-supabase-project') &&
     !serviceRoleKey?.includes('your-service-role-key');
 
   it('verifies real Supabase database persistence, transactions, and RPC queue claiming', async () => {
-    if (!isConfigured) {
-      console.warn(
-        '\n⚠️  [SUPABASE INTEGRATION TEST NOT EXECUTED]\n' +
-        'Reason: Supabase environment credentials (NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY) are not configured.\n' +
-        'To run real database integration tests, supply active Supabase project credentials in .env.local.\n'
+    if (!isEnabled || !hasValidCredentials) {
+      console.log(
+        '\n====================================================================\n' +
+        '⚠️  [SUPABASE INTEGRATION TEST SKIPPED]\n' +
+        'Reason: SUPABASE_INTEGRATION_TEST=true is not set or Supabase credentials\n' +
+        '(NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY) are missing.\n' +
+        'Test was skipped cleanly without faking.\n' +
+        'To run: cross-env SUPABASE_INTEGRATION_TEST=true NEXT_PUBLIC_SUPABASE_URL=<url> SUPABASE_SERVICE_ROLE_KEY=<key> npm run test:integration\n' +
+        '====================================================================\n'
       );
       expect(true).toBe(true);
       return;

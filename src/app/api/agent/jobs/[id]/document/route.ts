@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
 import { getRepository } from '@/lib/repository';
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
@@ -35,13 +36,56 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       );
     }
 
-    // Return mock document content or presigned signed URL redirect
-    return new NextResponse('MOCK SECURE PRINT DOCUMENT BUFFER', {
-      headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename="job-${jobId}.pdf"`,
-      },
-    });
+    const order = await repo.getOrder(job.orderId);
+    if (!order) {
+      return NextResponse.json({ error: 'Order associated with job not found.' }, { status: 404 });
+    }
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const hasSupabaseStorage =
+      Boolean(supabaseUrl && serviceRoleKey) &&
+      !supabaseUrl?.includes('your-supabase-project');
+
+    if (hasSupabaseStorage) {
+      // Production: Generate short-lived signed URL from private Supabase Storage
+      const supabase = createClient(supabaseUrl!, serviceRoleKey!, {
+        auth: { persistSession: false },
+      });
+
+      const { data: signedData, error: signedError } = await supabase.storage
+        .from('print-documents')
+        .createSignedUrl(order.storagePath, 300); // 5 minutes validity
+
+      if (signedError || !signedData?.signedUrl) {
+        return NextResponse.json(
+          { error: `Failed to generate signed document URL: ${signedError?.message || 'Storage error'}` },
+          { status: 500 }
+        );
+      }
+
+      return NextResponse.json({
+        downloadUrl: signedData.signedUrl,
+        expiresInSeconds: 300,
+        filename: order.originalFilename,
+      });
+    }
+
+    // Development / Test fallback only: NEVER active in production
+    if (process.env.NODE_ENV !== 'production') {
+      return new NextResponse('MOCK SECURE PRINT DOCUMENT BUFFER', {
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Disposition': `attachment; filename="${order.originalFilename}"`,
+        },
+      });
+    }
+
+    // In production, reject if private storage is not configured
+    return NextResponse.json(
+      { error: 'Private storage service is not configured for production document download.' },
+      { status: 500 }
+    );
   } catch (err: unknown) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Failed to retrieve document' },

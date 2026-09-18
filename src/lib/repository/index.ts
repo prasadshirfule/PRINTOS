@@ -6,21 +6,43 @@ let currentRepository: IPrintOSRepository | null = null;
 
 /**
  * Returns the active PrintOS persistence repository.
- * If Supabase environment credentials are present, returns the production SupabasePrintOSRepository.
- * Otherwise returns the in-memory repository (for isolated unit tests and local mock dev).
+ *
+ * PRODUCTION FAIL-FAST INVARIANT:
+ * In production (NODE_ENV === 'production'), if valid Supabase credentials are not configured,
+ * an explicit Error is thrown immediately. Never silently fall back to in-memory storage in production.
+ *
+ * In development / testing (NODE_ENV !== 'production'), falls back to InMemoryPrintOSRepository
+ * when Supabase credentials are not present.
  */
 export function getRepository(): IPrintOSRepository {
   if (currentRepository) {
     return currentRepository;
   }
 
+  const isProduction = process.env.NODE_ENV === 'production';
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  if (supabaseUrl && serviceRoleKey && !supabaseUrl.includes('your-supabase-project')) {
-    currentRepository = new SupabasePrintOSRepository(supabaseUrl, serviceRoleKey);
+  const hasValidSupabase =
+    Boolean(supabaseUrl && serviceRoleKey) &&
+    !supabaseUrl?.includes('your-supabase-project') &&
+    !serviceRoleKey?.includes('your-service-role-key');
+
+  if (isProduction) {
+    if (!hasValidSupabase) {
+      throw new Error(
+        'CRITICAL CONFIGURATION ERROR: Production environment detected (NODE_ENV=production), ' +
+        'but NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing or invalid. ' +
+        'In-memory storage fallback is strictly forbidden in production.'
+      );
+    }
+    currentRepository = new SupabasePrintOSRepository(supabaseUrl!, serviceRoleKey!);
   } else {
-    currentRepository = new InMemoryPrintOSRepository();
+    if (hasValidSupabase) {
+      currentRepository = new SupabasePrintOSRepository(supabaseUrl!, serviceRoleKey!);
+    } else {
+      currentRepository = new InMemoryPrintOSRepository();
+    }
   }
 
   return currentRepository;
