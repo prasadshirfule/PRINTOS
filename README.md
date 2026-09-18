@@ -144,7 +144,12 @@ Detailed architecture specifications, setup manuals, and testing guidelines are 
   - Fail-fast production environment validator (`ProductionEnvValidator`) detecting misconfiguration immediately on startup.
   - Sliding-window memory rate limiter (`MemoryRateLimiter`) protecting public webhook routes against denial-of-service.
   - Structured JSON/formatted contextual logging (`Logger`) across all critical paths.
-  - 100% passing test suite (19 test suites, 101+ automated tests).
+- [x] **Admin Authentication & Route Protection**
+  - Next.js middleware guarding all `/admin/*` pages and `/api/admin/*` routes.
+  - Cryptographic Web Crypto HMAC session tokens with `httpOnly` cookie protection (`printos_admin_session`).
+  - Seamless login portal (`/admin/login`) with Supabase Auth integration and local fallback credentials.
+  - Staff header navigation with active session status and one-click logout.
+  - 100% passing test suite (20 test suites, 111 automated tests).
 
 ---
 
@@ -168,6 +173,11 @@ Create a `.env.local` file in the root directory:
 # Cloud Backend Configuration
 NEXT_PUBLIC_APP_URL="http://localhost:3000"
 NODE_ENV="development"
+
+# Admin Authentication & Security
+ADMIN_EMAIL="admin@printos.local"
+ADMIN_PASSWORD="admin123"
+ADMIN_JWT_SECRET="your-secure-admin-session-secret"
 
 # Print Agent Security Key
 PRINTOS_AGENT_KEY="mock-agent-secret-token"
@@ -201,7 +211,7 @@ npm run dev
 ```
 
 Navigate to:
-- **Admin Dashboard**: [http://localhost:3000/admin](http://localhost:3000/admin)
+- **Admin Dashboard**: [http://localhost:3000/admin](http://localhost:3000/admin) (redirects to `/admin/login` if not authenticated)
 - **Live Print Queue**: [http://localhost:3000/admin/queue](http://localhost:3000/admin/queue)
 - **Orders List**: [http://localhost:3000/admin/orders](http://localhost:3000/admin/orders)
 - **Printers & Telemetry**: [http://localhost:3000/admin/printers](http://localhost:3000/admin/printers)
@@ -230,7 +240,7 @@ npm run agent:mock:fail
 PRINTOS includes a complete test suite covering unit calculations, concurrency invariants, and end-to-end acceptance flows:
 
 ```bash
-# Run all Vitest test suites (19 test suites, 101+ tests)
+# Run all Vitest test suites (20 test suites, 111 tests)
 npm test
 
 # Run Phase 1 End-to-End Acceptance Test

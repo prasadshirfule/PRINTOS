@@ -11,21 +11,24 @@ PRINTOS includes a comprehensive unit, integration, and acceptance test suite wr
 | `tests/pricing.test.ts` | Deterministic paisa calculations, paper sizes, color modes, duplex, copies, and discounts | 10 | PASS |
 | `tests/page-range.test.ts` | Complex range parsing, whitespace handling, deduplication, sorting, bounds & error validation | 11 | PASS |
 | `tests/order-state-machine.test.ts` | Valid status progression, terminal state checks, and illegal jump rejection | 5 | PASS |
-| `tests/queue-idempotency.test.ts` | Payment idempotency, duplicate webhook delivery protection, and atomic concurrent claiming | 5 | PASS |
+| `tests/queue-idempotency.test.ts` | Payment idempotency, duplicate webhook delivery protection, and atomic concurrent claiming | 6 | PASS |
 | `tests/document-inspector.test.ts` | PDF/image dimension extraction, page counting, and file size/type rejection | 5 | PASS |
 | `tests/mock-agent-failure.test.ts` | Mock agent simulated failure, retry scheduling, and maximum attempt limits | 1 | PASS |
-| `tests/production-fail-fast.test.ts` | Environment sanity checks ensuring production cannot run with in-memory fallbacks | 3 | PASS |
-| `tests/openwa-provider.test.ts` | OpenWA webhook verification, message sending, session check, and SSRF guard | 9 | PASS |
-| `tests/whatsapp-inbox.test.ts` | Inbound webhook pipeline, HMAC validation, and `whatsapp_inbox` persistence | 5 | PASS |
-| `tests/whatsapp-state-machine.test.ts` | Multi-step conversational transitions (`IDLE` ➔ `AWAITING_DOCUMENT` ➔ `AWAITING_CONFIG`) | 8 | PASS |
-| `tests/whatsapp-worker-recovery.test.ts` | Outbox worker retry backoff, dead-lettering, and worker recovery | 4 | PASS |
-| `tests/supabase-whatsapp-integration.test.ts` | Repository layer integration for WhatsApp entities with database schema | 4 | PASS |
+| `tests/production-fail-fast.test.ts` | Environment sanity checks ensuring production cannot run with in-memory fallbacks | 2 | PASS |
+| `tests/openwa-provider.test.ts` | OpenWA webhook verification, message sending, session check, and SSRF guard | 16 | PASS |
+| `tests/whatsapp-inbox.test.ts` | Inbound webhook pipeline, HMAC validation, and `whatsapp_inbox` persistence | 4 | PASS |
+| `tests/whatsapp-state-machine.test.ts` | Multi-step conversational transitions (`IDLE` ➔ `AWAITING_DOCUMENT` ➔ `AWAITING_CONFIG`) | 6 | PASS |
+| `tests/whatsapp-worker-recovery.test.ts` | Outbox worker retry backoff, dead-lettering, and worker recovery | 6 | PASS |
+| `tests/supabase-whatsapp-integration.test.ts` | Repository layer integration for WhatsApp entities with database schema | 1 | PASS |
 | `tests/payment-provider.test.ts` | Razorpay signature verification, NPCI UPI intent generation, and mock provider | 8 | PASS |
+| `tests/payment-webhook.test.ts` | Idempotent payment webhook, amount validation, and job creation | 5 | PASS |
 | `tests/windows-print-agent.test.ts` | SumatraPDF settings formatting, hardware discovery, and agent spooling | 5 | PASS |
 | `tests/cleanup-service.test.ts` | Document retention policy, expired file purge, and cron authentication | 2 | PASS |
 | `tests/env-validator.test.ts` | Fail-fast production environment validation and credential checks | 4 | PASS |
 | `tests/rate-limiter.test.ts` | Sliding window rate limiting and webhook abuse protection | 3 | PASS |
-| **Total Automated Tests** | | **101+** | **100% PASS** |
+| `tests/supabase-integration.test.ts` | Real Supabase database persistence and queue RPC checks | 1 | PASS |
+| `tests/admin-auth.test.ts` | Web Crypto HMAC token signing, tamper rejection, credentials & route guards | 10 | PASS |
+| **Total Automated Tests** | | **111** | **100% PASS** |
 
 ---
 
@@ -38,8 +41,8 @@ npm test
 
 Expected Output:
 ```
- Test Files  19 passed (19)
-      Tests  101 passed (101)
+ Test Files  20 passed (20)
+      Tests  111 passed (111)
 ```
 
 To run tests in watch mode during development:

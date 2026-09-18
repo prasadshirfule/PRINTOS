@@ -30,6 +30,11 @@ Create a `.env.local` file in the root directory:
 NEXT_PUBLIC_APP_URL="http://localhost:3000"
 NODE_ENV="development"
 
+# Admin Authentication & Security
+ADMIN_EMAIL="admin@printos.local"
+ADMIN_PASSWORD="admin123"
+ADMIN_JWT_SECRET="your-secure-admin-session-secret"
+
 # Print Agent Security Key
 PRINTOS_AGENT_KEY="mock-agent-secret-token"
 PRINTOS_AGENT_NAME="shop-pc-01"
@@ -60,7 +65,27 @@ PRINT_AGENT_MOCK_FAILURE="false"
 
 ---
 
-## 4. Running the Development Server
+## 4. Admin Portal & Authentication
+
+The `/admin/*` portal is fully protected by Next.js middleware and signed session tokens stored in secure `httpOnly` cookies (`printos_admin_session`).
+
+### Logging In
+1. Start the server (`npm run dev`) and visit [http://localhost:3000/admin](http://localhost:3000/admin).
+2. Unauthenticated requests are automatically redirected to the portal login at `/admin/login`.
+3. Default credentials for local development:
+   - **Email**: `admin@printos.local`
+   - **Password**: `admin123`
+4. Once authenticated, staff can view live queues, orders, and printer telemetry, or click **Sign Out** to destroy the active session.
+
+### Creating Production Admin Users (Supabase Auth)
+For production deployments using Supabase:
+1. Navigate to your Supabase Dashboard ➔ **Authentication** ➔ **Users**.
+2. Click **Add User** (or `Invite User`) and create an admin account with staff email and password.
+3. PRINTOS automatically queries `supabase.auth.signInWithPassword` first, generating signed session cookies upon verification.
+
+---
+
+## 5. Running the Development Server
 
 Start the Next.js application:
 ```powershell
@@ -68,14 +93,15 @@ npm run dev
 ```
 
 Open your browser at:
-- **Admin Dashboard**: [http://localhost:3000/admin](http://localhost:3000/admin)
+- **Admin Portal**: [http://localhost:3000/admin](http://localhost:3000/admin)
+- **Login Portal**: [http://localhost:3000/admin/login](http://localhost:3000/admin/login)
 - **All Orders**: [http://localhost:3000/admin/orders](http://localhost:3000/admin/orders)
 - **Live Print Queue**: [http://localhost:3000/admin/queue](http://localhost:3000/admin/queue)
 - **Printers & Telemetry**: [http://localhost:3000/admin/printers](http://localhost:3000/admin/printers)
 
 ---
 
-## 5. Running the Print Agent
+## 6. Running the Print Agent
 
 ### Production: Native Windows Print Agent
 Runs on the shop Windows PC connected to physical USB/LAN printers:
@@ -95,7 +121,7 @@ npm run agent:mock:fail
 
 ---
 
-## 6. Running Cron Maintenance Jobs
+## 7. Running Cron Maintenance Jobs
 
 PRINTOS includes automated cron endpoints protected by `CRON_SECRET`:
 
@@ -111,9 +137,9 @@ curl -X POST "http://localhost:3000/api/cron/cleanup?retentionHours=24" -H "Auth
 
 ---
 
-## 7. Running Tests & Quality Checks
+## 8. Running Tests & Quality Checks
 
-Run the full Vitest automated test suite (19 test files, 101+ tests):
+Run the full Vitest automated test suite (20 test files, 111 tests):
 ```powershell
 npm test
 ```
