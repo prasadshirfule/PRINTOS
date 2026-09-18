@@ -86,134 +86,170 @@ describe('Supabase PostgreSQL Real Integration Test', () => {
 
     // Clean up test document
     await rawSupabase.storage.from('print-documents').remove([testDocPath]);
-    console.log('  ✓ Private storage verified: public=false, signed URL active and tested.');
 
-    // ------------------------------------------------------------------------
-    // 2. Order Persistence in PostgreSQL
-    // ------------------------------------------------------------------------
-    console.log('▶ [2/6] Verifying Order Persistence in PostgreSQL...');
+    // Verify direct unauthorized public access is rejected
+    const publicUrlRes = await fetch(`${supabaseUrl}/storage/v1/object/public/print-documents/${testDocPath}`);
+    expect([400, 403, 404]).toContain(publicUrlRes.status);
+    console.log('  ✓ Private storage verified: public=false, signed URL active, unauthorized public access rejected.');
+
+    // Dynamically register 2 temporary test agents (no development seed required in production)
+    const agentAId = crypto.randomUUID();
+    const agentBId = crypto.randomUUID();
+    const agentAName = `test-agent-${Date.now()}-A`;
+    const agentBName = `test-agent-${Date.now()}-B`;
+
+    const { error: agentAError } = await rawSupabase.from('print_agents').insert({
+      id: agentAId,
+      agent_name: agentAName,
+      api_key_hash: 'test-hash-a',
+      status: 'ONLINE',
+      capabilities: {},
+    });
+    if (agentAError) throw new Error(`Failed to create test agent A: ${agentAError.message}`);
+
+    const { error: agentBError } = await rawSupabase.from('print_agents').insert({
+      id: agentBId,
+      agent_name: agentBName,
+      api_key_hash: 'test-hash-b',
+      status: 'ONLINE',
+      capabilities: {},
+    });
+    if (agentBError) throw new Error(`Failed to create test agent B: ${agentBError.message}`);
+
     const orderId = crypto.randomUUID();
     const orderNumber = `P${Math.floor(10000 + Math.random() * 90000)}`;
-    const order: PrintOrder = {
-      id: orderId,
-      orderNumber,
-      customerPhone: '919800000001',
-      customerName: 'Real Supabase Customer',
-      status: 'AWAITING_PAYMENT',
-      originalFilename: 'real-document.pdf',
-      storagePath: `orders/${orderId}/real-document.pdf`,
-      fileType: 'pdf',
-      fileSize: 4096,
-      pageCount: 3,
-      paperSize: 'A4',
-      colorMode: 'BW',
-      printSides: 'BOTH_SIDES',
-      copies: 2,
-      selectedPageCount: 3,
-      subtotalPaisa: 1200, // 3 * 2 * 200 = 1200 paisa
-      discountPaisa: 0,
-      totalAmountPaisa: 1200,
-      currency: 'INR',
-      paymentStatus: 'PENDING',
-      createdAt: new Date().toISOString(),
-    };
 
-    const created = await repo.createOrder(order);
-    expect(created.id).toBe(orderId);
-    expect(created.orderNumber).toBe(orderNumber);
+    try {
+      // ------------------------------------------------------------------------
+      // 2. Order Persistence in PostgreSQL
+      // ------------------------------------------------------------------------
+      console.log('▶ [2/6] Verifying Order Persistence in PostgreSQL...');
+      const order: PrintOrder = {
+        id: orderId,
+        orderNumber,
+        customerPhone: '919800000001',
+        customerName: 'Real Supabase Customer',
+        status: 'AWAITING_PAYMENT',
+        originalFilename: 'real-document.pdf',
+        storagePath: `orders/${orderId}/real-document.pdf`,
+        fileType: 'pdf',
+        fileSize: 4096,
+        pageCount: 3,
+        paperSize: 'A4',
+        colorMode: 'BW',
+        printSides: 'BOTH_SIDES',
+        copies: 2,
+        selectedPageCount: 3,
+        subtotalPaisa: 1200, // 3 * 2 * 200 = 1200 paisa
+        discountPaisa: 0,
+        totalAmountPaisa: 1200,
+        currency: 'INR',
+        paymentStatus: 'PENDING',
+        createdAt: new Date().toISOString(),
+      };
 
-    // Verify unique order_number constraint by attempting duplicate insertion
-    const duplicateOrder = { ...order, id: crypto.randomUUID() };
-    await expect(repo.createOrder(duplicateOrder)).rejects.toThrow();
-    console.log('  ✓ Order persisted in PostgreSQL and unique order_number constraint verified.');
+      const created = await repo.createOrder(order);
+      expect(created.id).toBe(orderId);
+      expect(created.orderNumber).toBe(orderNumber);
 
-    // ------------------------------------------------------------------------
-    // 3. Payment Transactions Insertion & Idempotency
-    // ------------------------------------------------------------------------
-    console.log('▶ [3/6] Verifying Payment Transactions & Idempotency...');
-    const txId = `pg_tx_${Date.now()}`;
-    const paymentResult = await repo.simulateVerifiedPayment(orderId, txId, 'REAL_UPI', 1200);
+      // Verify unique order_number constraint by attempting duplicate insertion
+      const duplicateOrder = { ...order, id: crypto.randomUUID() };
+      await expect(repo.createOrder(duplicateOrder)).rejects.toThrow();
+      console.log('  ✓ Order persisted in PostgreSQL and unique order_number constraint verified.');
 
-    expect(paymentResult.isDuplicate).toBe(false);
-    expect(paymentResult.order.status).toBe('QUEUED');
-    expect(paymentResult.order.paymentStatus).toBe('PAID');
-    expect(paymentResult.job.status).toBe('QUEUED');
+      // ------------------------------------------------------------------------
+      // 3. Payment Transactions Insertion & Idempotency
+      // ------------------------------------------------------------------------
+      console.log('▶ [3/6] Verifying Payment Transactions & Idempotency...');
+      const txId = `pg_tx_${Date.now()}`;
+      const paymentResult = await repo.simulateVerifiedPayment(orderId, txId, 'REAL_UPI', 1200);
 
-    // Duplicate webhook delivery with exact same txId
-    const dupResult = await repo.simulateVerifiedPayment(orderId, txId, 'REAL_UPI', 1200);
-    expect(dupResult.isDuplicate).toBe(true);
-    expect(dupResult.job.id).toBe(paymentResult.job.id);
+      expect(paymentResult.isDuplicate).toBe(false);
+      expect(paymentResult.order.status).toBe('QUEUED');
+      expect(paymentResult.order.paymentStatus).toBe('PAID');
+      expect(paymentResult.job.status).toBe('QUEUED');
 
-    // Verify DB unique constraint: Attempting to insert another job with same order_id directly must fail
-    const { error: directJobDupError } = await rawSupabase.from('print_jobs').insert({
-      order_id: orderId,
-      status: 'QUEUED',
-      print_options: {},
-    });
-    expect(directJobDupError).not.toBeNull();
-    expect(directJobDupError?.code).toBe('23505'); // unique_violation
-    console.log('  ✓ Payment idempotency verified; print_jobs.order_id unique constraint enforced.');
+      // Duplicate webhook delivery with exact same txId
+      const dupResult = await repo.simulateVerifiedPayment(orderId, txId, 'REAL_UPI', 1200);
+      expect(dupResult.isDuplicate).toBe(true);
+      expect(dupResult.job.id).toBe(paymentResult.job.id);
 
-    // ------------------------------------------------------------------------
-    // 4. Concurrent / Atomic Queue Claiming via PostgreSQL RPC
-    // ------------------------------------------------------------------------
-    console.log('▶ [4/6] Verifying Atomic Queue Claiming (FOR UPDATE SKIP LOCKED RPC)...');
-    const agentAId = '00000000-0000-0000-0000-000000000002';
-    const agentBId = '00000000-0000-0000-0000-000000000003';
+      // Verify DB unique constraint: Attempting to insert another job with same order_id directly must fail
+      const { error: directJobDupError } = await rawSupabase.from('print_jobs').insert({
+        order_id: orderId,
+        status: 'QUEUED',
+        print_options: {},
+      });
+      expect(directJobDupError).not.toBeNull();
+      expect(directJobDupError?.code).toBe('23505'); // unique_violation
+      console.log('  ✓ Payment idempotency verified; print_jobs.order_id unique constraint enforced.');
 
-    // Both agents claim simultaneously against real PostgreSQL database
-    const [claimA, claimB] = await Promise.all([
-      repo.claimNextPrintJob(agentAId),
-      repo.claimNextPrintJob(agentBId),
-    ]);
+      // ------------------------------------------------------------------------
+      // 4. Concurrent / Atomic Queue Claiming via PostgreSQL RPC
+      // ------------------------------------------------------------------------
+      console.log('▶ [4/6] Verifying Atomic Queue Claiming (FOR UPDATE SKIP LOCKED RPC)...');
 
-    const winningClaim = claimA || claimB;
-    const losingClaim = claimA ? claimB : claimA;
+      // Both agents claim simultaneously against real PostgreSQL database
+      const [claimA, claimB] = await Promise.all([
+        repo.claimNextPrintJob(agentAId),
+        repo.claimNextPrintJob(agentBId),
+      ]);
 
-    expect(winningClaim).not.toBeNull();
-    expect(losingClaim).toBeNull();
-    expect(winningClaim?.jobId).toBe(paymentResult.job.id);
+      const winningClaim = claimA || claimB;
+      const losingClaim = claimA ? claimB : claimA;
 
-    // Verify order transitioned to PRINTING in real database
-    let dbOrder = await repo.getOrder(orderId);
-    expect(dbOrder?.status).toBe('PRINTING');
-    console.log('  ✓ claim_next_print_job RPC executed: exactly 1 agent won the atomic lock.');
+      expect(winningClaim).not.toBeNull();
+      expect(losingClaim).toBeNull();
+      expect(winningClaim?.jobId).toBe(paymentResult.job.id);
 
-    // ------------------------------------------------------------------------
-    // 5. Agent Ownership & Status Update Lifecycle
-    // ------------------------------------------------------------------------
-    console.log('▶ [5/6] Verifying Agent Ownership & Order State Transitions...');
-    const winningAgentId = claimA ? agentAId : agentBId;
-    const rogueAgentId = claimA ? agentBId : agentAId;
+      // Verify order transitioned to PRINTING in real database
+      let dbOrder = await repo.getOrder(orderId);
+      expect(dbOrder?.status).toBe('PRINTING');
+      console.log('  ✓ claim_next_print_job RPC executed: exactly 1 agent won the atomic lock.');
 
-    // Rogue agent attempts status update -> must fail
-    await expect(
-      repo.updateJobStatus(winningClaim!.jobId, rogueAgentId, { status: 'COMPLETED' })
-    ).rejects.toThrow();
+      // ------------------------------------------------------------------------
+      // 5. Agent Ownership & Status Update Lifecycle
+      // ------------------------------------------------------------------------
+      console.log('▶ [5/6] Verifying Agent Ownership & Order State Transitions...');
+      const winningAgentId = claimA ? agentAId : agentBId;
+      const rogueAgentId = claimA ? agentBId : agentAId;
 
-    // Winning agent updates to COMPLETED
-    const completedJob = await repo.updateJobStatus(winningClaim!.jobId, winningAgentId, {
-      status: 'COMPLETED',
-    });
-    expect(completedJob.status).toBe('COMPLETED');
+      // Rogue agent attempts status update -> must fail
+      await expect(
+        repo.updateJobStatus(winningClaim!.jobId, rogueAgentId, { status: 'COMPLETED' })
+      ).rejects.toThrow();
 
-    dbOrder = await repo.getOrder(orderId);
-    expect(dbOrder?.status).toBe('COMPLETED');
-    expect(dbOrder?.completedAt).toBeDefined();
-    console.log('  ✓ Agent ownership enforced; Job & Order transitioned to COMPLETED.');
+      // Winning agent updates to COMPLETED
+      const completedJob = await repo.updateJobStatus(winningClaim!.jobId, winningAgentId, {
+        status: 'COMPLETED',
+      });
+      expect(completedJob.status).toBe('COMPLETED');
 
-    // ------------------------------------------------------------------------
-    // 6. Audit Trail Events Persistence
-    // ------------------------------------------------------------------------
-    console.log('▶ [6/6] Verifying Audit Event Trail in PostgreSQL...');
-    const events = await repo.getOrderEvents(orderId);
-    expect(events.length).toBeGreaterThanOrEqual(4);
-    const eventTypes = events.map((e) => e.eventType);
-    expect(eventTypes).toContain('FILE_RECEIVED');
-    expect(eventTypes).toContain('PRINT_QUEUED');
-    expect(eventTypes).toContain('STATUS_CHANGE_COMPLETED');
-    console.log(`  ✓ Recorded ${events.length} audit events in print_order_events table.`);
+      dbOrder = await repo.getOrder(orderId);
+      expect(dbOrder?.status).toBe('COMPLETED');
+      expect(dbOrder?.completedAt).toBeDefined();
+      console.log('  ✓ Agent ownership enforced; Job & Order transitioned to COMPLETED.');
 
-    console.log('\n🎉 Real Supabase Integration Test Passed Successfully!\n');
-  });
+      // ------------------------------------------------------------------------
+      // 6. Audit Trail Events Persistence
+      // ------------------------------------------------------------------------
+      console.log('▶ [6/6] Verifying Audit Event Trail in PostgreSQL...');
+      const events = await repo.getOrderEvents(orderId);
+      expect(events.length).toBeGreaterThanOrEqual(4);
+      const eventTypes = events.map((e) => e.eventType);
+      expect(eventTypes).toContain('FILE_RECEIVED');
+      expect(eventTypes).toContain('PRINT_QUEUED');
+      expect(eventTypes).toContain('STATUS_CHANGE_COMPLETED');
+      console.log(`  ✓ Recorded ${events.length} audit events in print_order_events table.`);
+
+      console.log('\n🎉 Real Supabase Integration Test Passed Successfully!\n');
+    } finally {
+      // Clean up temporary test data
+      await rawSupabase.from('print_order_events').delete().eq('order_id', orderId);
+      await rawSupabase.from('print_jobs').delete().eq('order_id', orderId);
+      await rawSupabase.from('payment_transactions').delete().eq('order_id', orderId);
+      await rawSupabase.from('print_orders').delete().eq('id', orderId);
+      await rawSupabase.from('print_agents').delete().in('id', [agentAId, agentBId]);
+    }
+  }, 30000);
 });

@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import {
   PrintOrder,
   PrintJob,
@@ -352,8 +353,9 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
   }
 
   public async authenticateAgent(providedKey: string): Promise<PrintAgent | null> {
+    const hash = crypto.createHash('sha256').update(providedKey).digest('hex');
     for (const agent of this.agents.values()) {
-      if (providedKey === 'mock-agent-secret-token' || agent.apiKeyHash === providedKey) {
+      if (agent.apiKeyHash === hash) {
         return agent;
       }
     }

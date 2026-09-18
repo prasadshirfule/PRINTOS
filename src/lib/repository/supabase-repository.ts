@@ -289,7 +289,7 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
       .from('print_jobs')
       .insert({
         order_id: order.id,
-        printer_id: order.printerId || '00000000-0000-0000-0000-000000000001',
+        printer_id: order.printerId || null,
         agent_id: null,
         status: 'QUEUED',
         priority: 10,
@@ -469,7 +469,7 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
     const { data, error } = await this.supabase
       .from('print_agents')
       .select('*')
-      .or(`api_key_hash.eq.${hash},api_key_hash.eq.${providedKey}`)
+      .eq('api_key_hash', hash)
       .maybeSingle();
 
     if (error) {

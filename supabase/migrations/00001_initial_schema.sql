@@ -255,3 +255,8 @@ $$ LANGUAGE plpgsql;
 REVOKE EXECUTE ON FUNCTION claim_next_print_job(UUID, UUID) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION claim_next_print_job(UUID, UUID) FROM anon;
 GRANT EXECUTE ON FUNCTION claim_next_print_job(UUID, UUID) TO service_role;
+
+-- Grant permissions on tables and sequences to service_role and postgres
+GRANT ALL ON ALL TABLES IN SCHEMA public TO postgres, service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO postgres, service_role;
+GRANT ALL ON ALL ROUTINES IN SCHEMA public TO postgres, service_role;
