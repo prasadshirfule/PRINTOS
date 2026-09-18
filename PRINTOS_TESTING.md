@@ -1,10 +1,10 @@
-﻿# PRINTOS — Testing Suite & Acceptance Guide
+# PRINTOS — Testing Suite & Acceptance Guide
 
 ---
 
 ## 1. Test Suite Architecture
 
-PRINTOS includes comprehensive unit and integration tests written in **Vitest**:
+PRINTOS includes a comprehensive unit, integration, and acceptance test suite written in **Vitest**:
 
 | Test Suite | Purpose | Tests | Status |
 | :--- | :--- | :---: | :---: |
@@ -14,40 +14,46 @@ PRINTOS includes comprehensive unit and integration tests written in **Vitest**:
 | `tests/queue-idempotency.test.ts` | Payment idempotency, duplicate webhook delivery protection, and atomic concurrent claiming | 5 | PASS |
 | `tests/document-inspector.test.ts` | PDF/image dimension extraction, page counting, and file size/type rejection | 5 | PASS |
 | `tests/mock-agent-failure.test.ts` | Mock agent simulated failure, retry scheduling, and maximum attempt limits | 1 | PASS |
-| **Total Unit Tests** | | **37** | **100% PASS** |
+| `tests/production-fail-fast.test.ts` | Environment sanity checks ensuring production cannot run with in-memory fallbacks | 3 | PASS |
+| `tests/openwa-provider.test.ts` | OpenWA webhook verification, message sending, session check, and SSRF guard | 9 | PASS |
+| `tests/whatsapp-inbox.test.ts` | Inbound webhook pipeline, HMAC validation, and `whatsapp_inbox` persistence | 5 | PASS |
+| `tests/whatsapp-state-machine.test.ts` | Multi-step conversational transitions (`IDLE` ➔ `AWAITING_DOCUMENT` ➔ `AWAITING_CONFIG`) | 8 | PASS |
+| `tests/whatsapp-worker-recovery.test.ts` | Outbox worker retry backoff, dead-lettering, and worker recovery | 4 | PASS |
+| `tests/supabase-whatsapp-integration.test.ts` | Repository layer integration for WhatsApp entities with database schema | 4 | PASS |
+| `tests/supabase-integration.test.ts` | Core repository Supabase integration suite | 4 | PASS |
+| **Total Automated Tests** | | **74+** | **100% PASS** |
 
 ---
 
 ## 2. Running Automated Tests
 
-Run the full test suite:
+Run the full Vitest test suite:
 ```powershell
 npm test
 ```
 
 Expected Output:
 ```
- ✓ tests/order-state-machine.test.ts (5 tests)
- ✓ tests/mock-agent-failure.test.ts (1 test)
- ✓ tests/page-range.test.ts (11 tests)
- ✓ tests/pricing.test.ts (10 tests)
- ✓ tests/queue-idempotency.test.ts (5 tests)
- ✓ tests/document-inspector.test.ts (5 tests)
+ Test Files  13 passed (13)
+      Tests  74 passed (74)
+```
 
- Test Files  6 passed (6)
-      Tests  37 passed (37)
+To run tests in watch mode during development:
+```powershell
+npm run test:watch
 ```
 
 ---
 
-## 3. Phase 1 Master Acceptance Test
+## 3. Master Acceptance Tests
 
-To execute the end-to-end acceptance flow without external dependencies:
+### Phase 1 Master Acceptance Test
+Executes the end-to-end core printing pipeline (order creation, paisa pricing, payment transition, atomic concurrency claim, mock printing, audit trail):
 ```powershell
 npm run acceptance:phase1
 ```
 
-### Steps Verified:
+#### Steps Verified:
 1. **Input Validation**: Rejects invalid page ranges ("5-1"), zero copies, and illegal state transitions (`RECEIVED` ➔ `PRINTING`).
 2. **Order Creation & Pricing**: Creates order #P1042 (A4 / B&W / Duplex / 2 copies / 12 pages) = ₹48.00 (4800 paisa).
 3. **Verified Payment**: Webhook marks order `PAID` and transitions it to `QUEUED`.
@@ -55,3 +61,19 @@ npm run acceptance:phase1
 5. **Atomic Claim**: Two concurrent agents attempt to claim the job simultaneously; exactly one agent claims it, and the other receives null.
 6. **Agent Execution**: Mock Print Agent moves order to `PRINTING`, simulates spooling, and marks `COMPLETED`.
 7. **Audit Trail & Metrics**: Verifies 8 recorded audit events and updated dashboard revenue & page totals.
+
+---
+
+### Phase 2 WhatsApp Ingestion Acceptance Test
+Executes the conversational WhatsApp intake, document processing, and outbox delivery pipeline:
+```powershell
+npm run acceptance:phase2
+```
+
+#### Steps Verified:
+1. **HMAC Webhook Ingestion**: OpenWA signature verified and stored in `whatsapp_inbox`.
+2. **Conversational Transition**: User prompt triggers state progression `IDLE` ➔ `AWAITING_DOCUMENT`.
+3. **Document Ingestion & Analysis**: Document upload triggers PDF analysis, extracting page count and dimensions.
+4. **Interactive Configuration**: Configuration parser processes color, duplex, and page range selections.
+5. **Fulfillability Policy**: Verifies that shop has active `ONLINE` printers matching requested capabilities.
+6. **Outbox Worker Queue**: Messages generated, queued in `whatsapp_outbox`, processed with exponential backoff, and dispatched.

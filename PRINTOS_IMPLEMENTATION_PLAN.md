@@ -1,4 +1,4 @@
-﻿# PRINTOS — WhatsApp Automated Printing Service
+# PRINTOS — WhatsApp Automated Printing Service
 ## Architecture & Master Implementation Plan
 
 ---
@@ -11,26 +11,34 @@ PRINTOS is a production-grade automated printing service designed for print shop
 
 ## 2. High-Level Architecture
 
-```
-Customer (WhatsApp)
-       │ (Sends PDF/Image & selects options)
-       ▼
-Cloud Backend (/api/whatsapp/webhook)
-       │ (Validates input, extracts metadata, computes price)
-       ▼
-Order State Machine (RECEIVED ➔ CONFIGURING ➔ AWAITING_PAYMENT)
-       │ (Generates UPI Payment Intent)
-       ▼
-Payment Gateway (/api/payments/webhook)
-       │ (Idempotent signature validation & transition to PAID)
-       ▼
-Print Queue (Atomic Job Creation: Exactly 1 job per order)
-       │ (PostgreSQL FOR UPDATE SKIP LOCKED / Atomic RPC)
-       ▼
-Shop Local Print Agent (HTTPS with Agent API Key)
-       │ (Downloads presigned short-lived URL, dispatches to Windows Print Spooler)
-       ▼
-Physical Printer (USB / Wi-Fi) ➔ Finished Document & WhatsApp Notification
+```mermaid
+flowchart TD
+    Customer([📱 Customer on WhatsApp]) -->|1. Sends PDF/Image & selects options| OpenWA[💬 WhatsApp Gateway / OpenWA]
+    OpenWA -->|2. Inbound Webhook with HMAC-SHA256| CloudBackend[☁️ Cloud Backend /api/webhooks/whatsapp]
+
+    subgraph Cloud [PRINTOS Cloud Engine]
+        CloudBackend -->|3. Record Inbound Event| Inbox[(📥 whatsapp_inbox)]
+        Inbox -->|4. Transition State| StateMachine[🔄 WhatsApp State Machine]
+        StateMachine -->|5. Minor-Currency Pricing| PricingEngine[💰 Pricing Engine - Paisa]
+        StateMachine -->|6. Queue Outbox Message| Outbox[(📤 whatsapp_outbox)]
+        Outbox -->|7. Worker Dispatch| OpenWA
+        PricingEngine -->|8. Create Order| Orders[(📋 print_orders)]
+    end
+
+    Customer -->|9. Pays via UPI / QR Intent| PaymentGW[💳 Payment Gateway /api/webhooks/payment]
+    PaymentGW -->|10. Idempotent Transition to PAID| Orders
+    Orders -->|11. Atomic Enqueue| PrintQueue[(🖨️ print_jobs)]
+
+    subgraph ShopPC [Local Shop Environment]
+        LocalAgent[🖥️ Isolated Local Print Agent] -->|12. HTTPS Long Poll / Heartbeat| PrintQueue
+        LocalAgent -->|13. Claim Job via SKIP LOCKED| PrintQueue
+        LocalAgent -->|14. Fetch Presigned Stream| DocStorage[(📁 Storage)]
+        LocalAgent -->|15. Spool to Printer| Spooler[⚙️ Windows Spooler / SumatraPDF]
+        Spooler -->|16. Printout| PhysicalPrinter[🖨️ Physical Printer USB / LAN]
+    end
+
+    LocalAgent -->|17. Report COMPLETED| CloudBackend
+    CloudBackend -->|18. Notify Customer| Customer
 ```
 
 ---
@@ -51,7 +59,9 @@ Physical Printer (USB / Wi-Fi) ➔ Finished Document & WhatsApp Notification
    - Tracks attempts (`attempt_count`), priority, and error messages.
 6. **`payment_transactions`**:
    - Ledger of all gateway callbacks with unique constraint on `(provider, transaction_id)`.
-7. **`print_order_events`**:
+7. **`whatsapp_inbox` & `whatsapp_outbox`**:
+   - Inbound webhook audit log and outbound message queue with exponential backoff worker engine.
+8. **`print_order_events`**:
    - Immutable audit trail recording every state change and customer interaction.
 
 ---
@@ -69,20 +79,23 @@ Physical Printer (USB / Wi-Fi) ➔ Finished Document & WhatsApp Notification
   - Standalone Mock Print Agent with heartbeat, queue claiming, and failure simulation.
   - 100% passing test suite (37 unit tests + end-to-end acceptance suite).
 
-- **Phase 2: WhatsApp Integration & Interactive Conversation Engine**
-  - Implement `IWhatsAppService` adapter for OpenWA / Baileys / Cloud API.
-  - Conversation state machine persisting conversational steps in database.
-  - Document intake webhook, validation, and private Supabase storage uploads.
+- **Phase 2: WhatsApp Integration & Interactive Conversation Engine (COMPLETED)**
+  - `IWhatsAppProvider` adapter implementation with OpenWA, Meta Cloud API, and Mock providers.
+  - Conversational state machine (`IDLE` ➔ `AWAITING_DOCUMENT` ➔ `AWAITING_CONFIG` ➔ `AWAITING_PAYMENT`).
+  - Inbound webhook processing with HMAC-SHA256 signature verification.
+  - Resilient outbound message queue (`whatsapp_outbox`) and worker engine with exponential backoff.
+  - Fulfillability policy check (verifying matching `ONLINE` hardware before payment quote).
+  - Full automated test suite (74+ tests passing across 13 test suites).
 
-- **Phase 3: Payment Gateway & Queue Automation**
-  - UPI / Razorpay / Cashfree gateway abstraction with signature verification.
-  - Webhook idempotency handling and automatic transition to `PAID` / `QUEUED`.
+- **Phase 3: Production Payment Gateway & Dynamic UPI Intents (IN PROGRESS)**
+  - UPI / Razorpay / Cashfree gateway integration with dynamic QR generation.
+  - Idempotent payment webhook verification and automated transition to `PAID` / `QUEUED`.
 
 - **Phase 4: Production Windows Print Agent**
   - Native Windows Print Spooler integration (PowerShell / SumatraPDF CLI).
-  - Hardware duplex and color capability auto-discovery.
+  - Hardware duplex and color capability auto-discovery via WMI/CIM.
   - Short-lived signed document streaming and automatic cleanup.
 
 - **Phase 5: Production Hardening, Observability & Cleanup**
-  - File retention cleanup cron job (`/api/cron/cleanup`).
+  - File retention cleanup cron job (`/api/cron/process-queues`).
   - Structured audit logging, rate limiting, and end-to-end security audits.
