@@ -358,6 +358,7 @@ Before opening the service to customers, complete this verification checklist:
 
 ---
 
-## 📞 Support & Maintenance
+## 📞 Support & Handover
 
-For issues, bug reports, and contributions, visit the [PRINTOS GitHub Repository](https://github.com/prasadshirfule/PRINTOS).
+- **For Shop Counter Staff**: Hand over [**PRINTOS_OPERATOR_MANUAL.md**](./PRINTOS_OPERATOR_MANUAL.md) for non-technical morning startup routines, daily queue monitoring, and troubleshooting.
+- **For Issues & Contributions**: Visit the [PRINTOS GitHub Repository](https://github.com/prasadshirfule/PRINTOS).
