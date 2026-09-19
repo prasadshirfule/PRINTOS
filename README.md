@@ -112,6 +112,7 @@ Detailed architecture specifications, setup manuals, and testing guidelines are 
 | 📋 [**PRINTOS_IMPLEMENTATION_PLAN.md**](./PRINTOS_IMPLEMENTATION_PLAN.md) | Master architectural blueprint, database entity schemas, and multi-phase roadmap |
 | ⚙️ [**PRINTOS_SETUP.md**](./PRINTOS_SETUP.md) | Step-by-step local development setup, environment variables, and execution guide |
 | 🚀 [**PRINTOS_DEPLOYMENT.md**](./PRINTOS_DEPLOYMENT.md) | Comprehensive step-by-step production deployment guide (Vercel, Supabase, Windows Print Agent, Razorpay) |
+| ✅ [**PRINTOS_LAUNCH_CHECKLIST.md**](./PRINTOS_LAUNCH_CHECKLIST.md) | Practical pre-launch verification, end-to-end testing, and soft launch rollout checklist |
 | 👥 [**PRINTOS_OPERATOR_MANUAL.md**](./PRINTOS_OPERATOR_MANUAL.md) | Non-technical daily operations manual for shop owners and counter staff |
 | 🖨️ [**PRINTOS_PRINT_AGENT.md**](./PRINTOS_PRINT_AGENT.md) | Specification for the local isolated Windows Print Agent daemon and hardware integration |
 | 🧪 [**PRINTOS_TESTING.md**](./PRINTOS_TESTING.md) | Comprehensive test suite reference, acceptance verification, and mock failure testing |
