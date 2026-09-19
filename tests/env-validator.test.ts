@@ -31,6 +31,7 @@ describe('Production Environment Validator', () => {
       SUPABASE_SERVICE_ROLE_KEY: 'eyProdServiceRoleToken...',
       PRINTOS_AGENT_KEY: 'prod-agent-strong-secret-token-999',
       ADMIN_JWT_SECRET: 'super-secure-production-jwt-secret-999',
+      ADMIN_EMAIL: 'shop-admin@printos.io',
       ADMIN_PASSWORD: 'complex-secure-prod-password-456',
       CRON_SECRET: 'prod-cron-secret-123456789',
       PAYMENT_PROVIDER: 'razorpay',
@@ -69,5 +70,52 @@ describe('Production Environment Validator', () => {
         NODE_ENV: 'production',
       })
     ).toThrowError(/CRITICAL PRODUCTION CONFIGURATION ERROR/);
+  });
+
+  it('rejects default ADMIN_EMAIL "admin@printos.local" in production mode', () => {
+    const envWithDefaultEmail = {
+      NODE_ENV: 'production',
+      NEXT_PUBLIC_SUPABASE_URL: 'https://prod-project.supabase.co',
+      SUPABASE_SERVICE_ROLE_KEY: 'eyProdServiceRoleToken...',
+      PRINTOS_AGENT_KEY: 'prod-agent-strong-secret-token-999',
+      ADMIN_JWT_SECRET: 'super-secure-production-jwt-secret-999',
+      ADMIN_EMAIL: 'admin@printos.local',
+      ADMIN_PASSWORD: 'complex-secure-prod-password-456',
+      CRON_SECRET: 'prod-cron-secret-123456789',
+    };
+
+    const result = ProductionEnvValidator.validate(envWithDefaultEmail);
+    expect(result.isValid).toBe(false);
+    expect(result.errors).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('ADMIN_EMAIL'),
+      ])
+    );
+  });
+
+  it('rejects placeholder secrets copied verbatim from documentation', () => {
+    const envWithPlaceholders = {
+      NODE_ENV: 'production',
+      NEXT_PUBLIC_SUPABASE_URL: 'https://prod-project.supabase.co',
+      SUPABASE_SERVICE_ROLE_KEY: 'eyProdServiceRoleToken...',
+      PRINTOS_AGENT_KEY: 'prod-agent-strong-secret-token-999',
+      ADMIN_EMAIL: 'real-admin@shop.com',
+      ADMIN_PASSWORD: 'complex-secure-prod-password-456',
+      ADMIN_JWT_SECRET: 'your-secure-admin-session-secret',
+      CRON_SECRET: 'your-secure-cron-secret-token',
+    };
+
+    const result = ProductionEnvValidator.validate(envWithPlaceholders);
+    expect(result.isValid).toBe(false);
+    expect(result.errors).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('ADMIN_JWT_SECRET'),
+      ])
+    );
+    expect(result.errors).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('CRON_SECRET'),
+      ])
+    );
   });
 });

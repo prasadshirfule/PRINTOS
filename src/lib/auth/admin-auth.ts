@@ -17,8 +17,21 @@ export interface AdminAuthResult {
   error?: string;
 }
 
+let _authSecretWarningEmitted = false;
+
 function getAuthSecret(): string {
-  return process.env.ADMIN_JWT_SECRET || process.env.PRINTOS_AGENT_KEY || 'printos_default_secure_auth_key_123';
+  const secret = process.env.ADMIN_JWT_SECRET || process.env.PRINTOS_AGENT_KEY;
+  if (secret) {
+    return secret;
+  }
+  if (!_authSecretWarningEmitted) {
+    console.warn(
+      '[PRINTOS Security Warning] ADMIN_JWT_SECRET is not set. Falling back to default insecure auth secret. ' +
+      'This is acceptable for local development but MUST be configured before production deployment.'
+    );
+    _authSecretWarningEmitted = true;
+  }
+  return 'printos_default_secure_auth_key_123';
 }
 
 function toBase64Url(bytes: Uint8Array): string {

@@ -9,6 +9,10 @@
 
 > **Enterprise-grade, automated self-service printing operating system for print shops — featuring conversational WhatsApp document ingestion, deterministic minor-currency UPI pricing, atomic cloud queueing, and isolated local Windows print agents.**
 
+> [!WARNING]
+> **Security Notice — Default Credentials**
+> This repository ships with default development credentials (`admin@printos.local` / `admin123`) for local testing convenience. These credentials are **insecure** and must **never** be used in staging or production environments. The built-in `ProductionEnvValidator` will block application startup if default passwords, placeholder secrets, or the default admin email are detected when `NODE_ENV=production`. See [PRINTOS_DEPLOYMENT.md](./PRINTOS_DEPLOYMENT.md) for the complete production deployment guide and security checklist.
+
 ---
 
 ## 📖 Table of Contents
@@ -107,6 +111,7 @@ Detailed architecture specifications, setup manuals, and testing guidelines are 
 | :--- | :--- |
 | 📋 [**PRINTOS_IMPLEMENTATION_PLAN.md**](./PRINTOS_IMPLEMENTATION_PLAN.md) | Master architectural blueprint, database entity schemas, and multi-phase roadmap |
 | ⚙️ [**PRINTOS_SETUP.md**](./PRINTOS_SETUP.md) | Step-by-step local development setup, environment variables, and execution guide |
+| 🚀 [**PRINTOS_DEPLOYMENT.md**](./PRINTOS_DEPLOYMENT.md) | Comprehensive step-by-step production deployment guide (Vercel, Supabase, Windows Print Agent, Razorpay) |
 | 🖨️ [**PRINTOS_PRINT_AGENT.md**](./PRINTOS_PRINT_AGENT.md) | Specification for the local isolated Windows Print Agent daemon and hardware integration |
 | 🧪 [**PRINTOS_TESTING.md**](./PRINTOS_TESTING.md) | Comprehensive test suite reference, acceptance verification, and mock failure testing |
 
@@ -156,9 +161,10 @@ Detailed architecture specifications, setup manuals, and testing guidelines are 
 - [x] **Final Production Polish & Observability**
   - Public system health check endpoint (`/api/health`) for uptime monitoring.
   - Custom Next.js 404 (`not-found.tsx`) and error boundary (`error.tsx`) pages.
-  - Hardened production secret checks preventing insecure default credentials in live environments.
+  - Hardened production secret checks preventing insecure default credentials, placeholder secrets, and default admin email in live environments.
+  - Consistent structured logging (`Logger`) across all API routes including cron endpoints.
   - Official MIT Open Source License.
-  - 100% passing test suite (22 test suites, 118 automated tests).
+  - 100% passing test suite (22 test suites, 120 automated tests).
 
 ---
 
@@ -184,17 +190,19 @@ NEXT_PUBLIC_APP_URL="http://localhost:3000"
 NODE_ENV="development"
 
 # Admin Authentication & Security
-ADMIN_EMAIL="admin@printos.local"
-ADMIN_PASSWORD="admin123"
-ADMIN_JWT_SECRET="your-secure-admin-session-secret"
+# ⚠️ DEVELOPMENT ONLY — change ALL values below before production deployment
+ADMIN_EMAIL="admin@printos.local"        # Replace with real admin email in production
+ADMIN_PASSWORD="admin123"                 # Replace with a strong password in production
+ADMIN_JWT_SECRET="your-secure-admin-session-secret"  # Replace with a 32+ char random secret
 
 # Print Agent Security Key
+# ⚠️ DEVELOPMENT ONLY — use a cryptographically random string in production
 PRINTOS_AGENT_KEY="mock-agent-secret-token"
 PRINTOS_AGENT_NAME="shop-pc-01"
 PRINTOS_API_URL="http://localhost:3000"
 
 # Cron Security Token
-CRON_SECRET="your-secure-cron-secret-token"
+CRON_SECRET="your-secure-cron-secret-token"  # Replace with a unique secret in production
 
 # Optional: Preferred Physical Printer Name (defaults to Windows default)
 # PRINT_AGENT_PRINTER_NAME="Canon MF3010"
@@ -249,7 +257,7 @@ npm run agent:mock:fail
 PRINTOS includes a complete test suite covering unit calculations, concurrency invariants, and end-to-end acceptance flows:
 
 ```bash
-# Run all Vitest test suites (22 test suites, 118 tests)
+# Run all Vitest test suites (22 test suites, 120 tests)
 npm test
 
 # Run Phase 1 End-to-End Acceptance Test

@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getRepository } from '@/lib/repository';
 import { CleanupService } from '@/lib/storage/cleanup-service';
+import { createLogger } from '@/lib/observability/logger';
 
 export const dynamic = 'force-dynamic';
+
+const logger = createLogger('CronCleanup');
 
 export async function GET(req: NextRequest) {
   return handleCleanupCron(req);
@@ -39,7 +42,7 @@ async function handleCleanupCron(req: NextRequest) {
       result,
     });
   } catch (err: unknown) {
-    console.error('[CRON Cleanup Error]:', err);
+    logger.error('Retention cleanup cycle failed', err instanceof Error ? err : undefined);
     return NextResponse.json(
       {
         success: false,

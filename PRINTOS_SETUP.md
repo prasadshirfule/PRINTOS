@@ -34,11 +34,14 @@ NODE_ENV="development"
 # DEFAULT_SHOP_ID="00000000-0000-0000-0000-000000000001"
 
 # Admin Authentication & Security
-ADMIN_EMAIL="admin@printos.local"
-ADMIN_PASSWORD="admin123"
-ADMIN_JWT_SECRET="your-secure-admin-session-secret"
+# ⚠️ DEVELOPMENT ONLY — All values below MUST be changed before production deployment.
+# ProductionEnvValidator will block startup if these defaults are detected in production.
+ADMIN_EMAIL="admin@printos.local"        # Replace with a real admin email in production
+ADMIN_PASSWORD="admin123"                 # Replace with a strong password in production
+ADMIN_JWT_SECRET="your-secure-admin-session-secret"  # Replace with 32+ char random secret
 
 # Print Agent Security Key
+# ⚠️ DEVELOPMENT ONLY — use a cryptographically random string (16+ chars) in production
 PRINTOS_AGENT_KEY="mock-agent-secret-token"
 PRINTOS_AGENT_NAME="shop-pc-01"
 PRINTOS_API_URL="http://localhost:3000"
@@ -47,6 +50,7 @@ PRINTOS_API_URL="http://localhost:3000"
 # PRINT_AGENT_PRINTER_NAME="Canon MF3010"
 
 # Cron Job Security Token
+# ⚠️ DEVELOPMENT ONLY — set a unique secret in production
 CRON_SECRET="your-secure-cron-secret-token"
 
 # Optional: Razorpay Production Credentials (Mock provider used if omitted)
@@ -103,7 +107,24 @@ For production deployments using Supabase:
 
 ---
 
-## 6. Production Deployment Checklist & Security
+## 6. Production vs Development Mode
+
+| Feature | Development (`NODE_ENV=development`) | Production (`NODE_ENV=production`) |
+| :--- | :--- | :--- |
+| **Database** | In-memory repository (no Supabase required) | Supabase PostgreSQL (required) |
+| **Payment Gateway** | `MockPaymentProvider` (no real charges) | `RazorpayPaymentProvider` (live UPI) |
+| **WhatsApp** | `MockWhatsAppProvider` (no real messages) | `OpenWA` / Meta Cloud API (live) |
+| **Admin Auth** | Local fallback credentials accepted | Supabase Auth or strong local credentials enforced |
+| **Document Storage** | In-memory / mock document buffer | Private Supabase Storage with signed URLs |
+| **Env Validation** | Warnings only (non-blocking) | Fail-fast on insecure defaults (blocks startup) |
+| **Login Page** | Default credential hints shown | Credential hints hidden |
+
+---
+
+## 7. Production Deployment & Security Guide
+
+> [!TIP]
+> **Complete Production Deployment Guide**: For the full, step-by-step production walkthrough covering Vercel, Supabase, Razorpay webhooks, OpenWA, and running the Windows Print Agent as an autostart background service, see [**PRINTOS_DEPLOYMENT.md**](./PRINTOS_DEPLOYMENT.md).
 
 Before deploying PRINTOS to production (e.g. Vercel, Railway, AWS):
 
@@ -111,20 +132,22 @@ Before deploying PRINTOS to production (e.g. Vercel, Railway, AWS):
    - Ensure `NODE_ENV="production"` is set.
    - `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` must point to your live Supabase instance.
    - `ADMIN_JWT_SECRET` must be set to a high-entropy secret (min 32 characters).
+   - `ADMIN_EMAIL` must NOT be `admin@printos.local` — set a real admin email address.
    - `ADMIN_PASSWORD` (if using local auth fallback) must NOT be `admin123`.
    - `PRINTOS_AGENT_KEY` must be a cryptographically secure random string shared only with your local Windows Print Agent PCs.
    - `CRON_SECRET` must be set to protect `/api/cron/*` endpoints from unauthorized triggers.
+   - Do NOT copy placeholder values like `your-secure-admin-session-secret` or `your-secure-cron-secret-token` verbatim — generate unique secrets.
    - Configure live Razorpay API keys (`RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`).
 
 2. **Database Migrations**:
-   - Run migrations `00001_initial_schema.sql` through `00004_multi_shop_schema.sql` in your Supabase SQL editor.
+   - Run migrations `00001_initial_schema.sql` through `00004_multi_shop_schema.sql` in your Supabase SQL editor (do NOT run `00002_development_seed.sql` in production).
 
 3. **Uptime & Health Monitoring**:
    - Monitor the public health check endpoint at `/api/health` using UptimeRobot, BetterStack, or Datadog. It returns HTTP 200 with repository and system telemetry.
 
 ---
 
-## 7. Running the Development Server
+## 8. Running the Development Server
 
 Start the Next.js application:
 ```powershell
@@ -140,7 +163,7 @@ Open your browser at:
 
 ---
 
-## 8. Running the Print Agent
+## 9. Running the Print Agent
 
 ### Production: Native Windows Print Agent
 Runs on the shop Windows PC connected to physical USB/LAN printers:
@@ -160,7 +183,7 @@ npm run agent:mock:fail
 
 ---
 
-## 9. Running Cron Maintenance Jobs
+## 10. Running Cron Maintenance Jobs
 
 PRINTOS includes automated cron endpoints protected by `CRON_SECRET`:
 
@@ -176,9 +199,9 @@ curl -X POST "http://localhost:3000/api/cron/cleanup?retentionHours=24" -H "Auth
 
 ---
 
-## 10. Running Tests & Quality Checks
+## 11. Running Tests & Quality Checks
 
-Run the full Vitest automated test suite (22 test files, 117 tests):
+Run the full Vitest automated test suite (22 test files, 120 tests):
 ```powershell
 npm test
 ```

@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getRepository } from '@/lib/repository';
 import { WhatsAppWorkerEngine } from '@/lib/whatsapp/worker-engine';
+import { createLogger } from '@/lib/observability/logger';
 
 export const dynamic = 'force-dynamic';
+
+const logger = createLogger('CronProcessQueues');
 
 export async function GET(req: NextRequest) {
   return handleCron(req);
@@ -35,7 +38,7 @@ async function handleCron(req: NextRequest) {
       result,
     });
   } catch (err: unknown) {
-    console.error('[CRON Queue Worker Error]:', err);
+    logger.error('Cron worker cycle failed', err instanceof Error ? err : undefined);
     return NextResponse.json(
       {
         success: false,

@@ -92,9 +92,16 @@ export async function POST(req: NextRequest) {
       priceBreakdown,
     });
   } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Failed to create order';
+    const isValidationError = err instanceof Error && (
+      message.includes('required') ||
+      message.includes('invalid') ||
+      message.includes('Invalid') ||
+      message.includes('must be')
+    );
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to create order' },
-      { status: 400 }
+      { error: message },
+      { status: isValidationError ? 400 : 500 }
     );
   }
 }

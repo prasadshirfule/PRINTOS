@@ -14,6 +14,8 @@ export class ProductionEnvValidator {
     'dev-agent-key-secret-123456789',
     'printos_default_secure_auth_key_123',
     'dev-cron-secret-123456789',
+    'your-secure-admin-session-secret',
+    'your-secure-cron-secret-token',
     'admin123',
     'password',
     'secret',
@@ -67,6 +69,12 @@ export class ProductionEnvValidator {
       } else if (adminSecret.length < 16) {
         errors.push('ADMIN_JWT_SECRET is too short (must be at least 16 characters for production).');
       }
+    }
+
+    // Check default local admin email
+    const adminEmail = (env.ADMIN_EMAIL || '').toLowerCase();
+    if (isProduction && (adminEmail === 'admin@printos.local' || !adminEmail)) {
+      errors.push('CRITICAL: Default ADMIN_EMAIL "admin@printos.local" must not be used in production. Set a real admin email address.');
     }
 
     // Check default local admin credentials

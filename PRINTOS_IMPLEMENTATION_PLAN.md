@@ -109,4 +109,4 @@ flowchart TD
   - Fail-fast production environment validator (`ProductionEnvValidator`) detecting misconfiguration on startup.
   - Sliding-window memory rate limiter (`MemoryRateLimiter`) protecting public webhook routes against abuse.
   - Structured JSON/formatted contextual logging (`Logger`) across all critical paths.
-  - 100% passing automated test suite (101+ tests across 19 test suites).
+  - 100% passing automated test suite (120 tests across 22 test suites).

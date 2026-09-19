@@ -119,11 +119,13 @@ function LoginForm() {
         </button>
       </form>
 
-      <div className="border-t border-slate-700/60 pt-4 text-center">
-        <p className="text-xs text-slate-400">
-          Default credentials for local testing: <code className="text-blue-400">admin@printos.local</code> / <code className="text-blue-400">admin123</code>
-        </p>
-      </div>
+      {process.env.NODE_ENV !== 'production' && (
+        <div className="border-t border-slate-700/60 pt-4 text-center">
+          <p className="text-xs text-slate-400">
+            Default credentials for local testing: <code className="text-blue-400">admin@printos.local</code> / <code className="text-blue-400">admin123</code>
+          </p>
+        </div>
+      )}
     </div>
   );
 }

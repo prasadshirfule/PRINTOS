@@ -1,4 +1,4 @@
-﻿import { ClaimedJob, PrinterStatus } from '../types/printos';
+import { ClaimedJob, PrinterStatus } from '../types/printos';
 
 export interface MockAgentConfig {
   apiUrl: string;
@@ -63,7 +63,7 @@ export class MockPrintAgent {
           },
         }),
       });
-      // console.log(`[MockAgent] Heartbeat sent. Status: ${this.config.printerStatus}`);
+
     } catch (err: unknown) {
       console.error(`[MockAgent] Heartbeat failed: ${err instanceof Error ? err.message : String(err)}`);
     }

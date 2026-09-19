@@ -24,13 +24,13 @@ PRINTOS includes a comprehensive unit, integration, and acceptance test suite wr
 | `tests/payment-webhook.test.ts` | Idempotent payment webhook, amount validation, and job creation | 5 | PASS |
 | `tests/windows-print-agent.test.ts` | SumatraPDF settings formatting, hardware discovery, and agent spooling | 5 | PASS |
 | `tests/cleanup-service.test.ts` | Document retention policy, expired file purge, and cron authentication | 2 | PASS |
-| `tests/env-validator.test.ts` | Fail-fast production environment validation and credential checks | 4 | PASS |
+| `tests/env-validator.test.ts` | Fail-fast production environment validation, credential checks, and placeholder secret rejection | 7 | PASS |
 | `tests/rate-limiter.test.ts` | Sliding window rate limiting and webhook abuse protection | 3 | PASS |
 | `tests/supabase-integration.test.ts` | Real Supabase database persistence and queue RPC checks | 1 | PASS |
 | `tests/admin-auth.test.ts` | Web Crypto HMAC token signing, tamper rejection, credentials & route guards | 10 | PASS |
 | `tests/multi-tenant-isolation.test.ts` | Tenant shop isolation across orders, metrics, print queues, printers, and admin routes | 5 | PASS |
 | `tests/health.test.ts` | System uptime monitoring, repository connectivity, and telemetry | 1 | PASS |
-| **Total Automated Tests** | | **118** | **100% PASS** |
+| **Total Automated Tests** | | **120** | **100% PASS** |
 
 ---
 
@@ -44,7 +44,7 @@ npm test
 Expected Output:
 ```
  Test Files  22 passed (22)
-      Tests  118 passed (118)
+      Tests  120 passed (120)
 ```
 
 To run tests in watch mode during development:
