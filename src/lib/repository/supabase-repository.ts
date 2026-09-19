@@ -588,16 +588,13 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
 
     const { data, error } = await this.supabase
       .from('print_agents')
-      .upsert(
-        {
-          agent_name: agentName,
-          status: 'ONLINE',
-          version,
-          capabilities: capabilities || {},
-          last_seen_at: now,
-        },
-        { onConflict: 'agent_name' }
-      )
+      .update({
+        status: 'ONLINE',
+        version,
+        capabilities: capabilities || {},
+        last_seen_at: now,
+      })
+      .eq('agent_name', agentName)
       .select()
       .single();
 
