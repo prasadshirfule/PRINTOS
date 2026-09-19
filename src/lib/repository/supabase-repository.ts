@@ -94,6 +94,30 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
     return this.mapShop(data);
   }
 
+  public async updateShop(shopId: string, updates: Partial<Shop>): Promise<Shop> {
+    const payload: Record<string, unknown> = {
+      updated_at: new Date().toISOString(),
+    };
+    if (updates.name !== undefined) payload.name = updates.name;
+    if (updates.slug !== undefined) payload.slug = updates.slug;
+    if (updates.phone !== undefined) payload.phone = updates.phone;
+    if (updates.address !== undefined) payload.address = updates.address;
+    if (updates.currency !== undefined) payload.currency = updates.currency;
+    if (updates.isActive !== undefined) payload.is_active = updates.isActive;
+
+    const { data, error } = await this.supabase
+      .from('shops')
+      .update(payload)
+      .eq('id', shopId)
+      .select()
+      .single();
+
+    if (error) {
+      throw new Error(`Supabase updateShop failed: ${error.message}`);
+    }
+    return this.mapShop(data);
+  }
+
   // --------------------------------------------------------------------------
   // Order Operations
   // --------------------------------------------------------------------------

@@ -58,6 +58,7 @@ export interface IPrintOSRepository {
   getShop(shopId: string): Promise<Shop | null>;
   listShops(): Promise<Shop[]>;
   createShop(shop: Shop): Promise<Shop>;
+  updateShop(shopId: string, updates: Partial<Shop>): Promise<Shop>;
 
   // Order operations
   createOrder(order: PrintOrder): Promise<PrintOrder>;

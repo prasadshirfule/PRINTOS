@@ -44,6 +44,7 @@ export function AdminHeader() {
     { href: '/admin/orders', label: 'Orders' },
     { href: '/admin/queue', label: 'Print Queue' },
     { href: '/admin/printers', label: 'Printers & Agents' },
+    { href: '/admin/shops', label: 'Shops' },
   ];
 
   return (

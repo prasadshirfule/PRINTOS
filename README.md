@@ -233,6 +233,7 @@ Navigate to:
 - **Live Print Queue**: [http://localhost:3000/admin/queue](http://localhost:3000/admin/queue)
 - **Orders List**: [http://localhost:3000/admin/orders](http://localhost:3000/admin/orders)
 - **Printers & Telemetry**: [http://localhost:3000/admin/printers](http://localhost:3000/admin/printers)
+- **Shop Management**: [http://localhost:3000/admin/shops](http://localhost:3000/admin/shops)
 
 ---
 

@@ -102,6 +102,11 @@ The Admin Dashboard gives you full visibility into your shop's operations in rea
   - 🔴 **OFFLINE**: Printer is turned off, disconnected, or having a driver issue.
 - Displays supported capabilities: Color support, Double-sided (Duplex) printing, and Paper sizes.
 
+### E. Shop Management & Branch Settings (`/admin/shops`)
+- View and manage your print shop branch profile, phone numbers, and physical counter address.
+- Monitor per-shop operational statistics: orders count, active queue, online printers, and total revenue.
+- Multi-shop owners can configure new branch locations and toggle shop online/offline availability.
+
 ---
 
 ## 💰 4. Print Pricing & Settings

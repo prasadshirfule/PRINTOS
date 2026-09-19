@@ -113,6 +113,21 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
     return shop;
   }
 
+  public async updateShop(shopId: string, updates: Partial<Shop>): Promise<Shop> {
+    const existing = this.shops.get(shopId);
+    if (!existing) {
+      throw new ResourceNotFoundError('Shop', shopId);
+    }
+    const updated: Shop = {
+      ...existing,
+      ...updates,
+      id: existing.id,
+      updatedAt: new Date().toISOString(),
+    };
+    this.shops.set(shopId, updated);
+    return updated;
+  }
+
   // --------------------------------------------------------------------------
   // Order Operations
   // --------------------------------------------------------------------------
