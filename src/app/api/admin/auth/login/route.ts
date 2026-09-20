@@ -6,7 +6,7 @@ export const dynamic = 'force-dynamic';
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { email, password, shopId } = body;
+    const { email, password } = body;
 
     if (!email || !password) {
       return NextResponse.json(
@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const authResult = await authenticateAdminLogin(email, password, shopId);
+    const authResult = await authenticateAdminLogin(email, password);
 
     if (!authResult.success || !authResult.token || !authResult.user) {
       return NextResponse.json(

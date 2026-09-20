@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import crypto from 'crypto';
 import {
   RazorpayPaymentProvider,
@@ -16,6 +16,7 @@ describe('Payment Provider Abstraction Layer', () => {
 
   afterEach(() => {
     setPaymentProvider(null);
+    vi.restoreAllMocks();
   });
 
   describe('RazorpayPaymentProvider', () => {
@@ -28,21 +29,35 @@ describe('Payment Provider Abstraction Layer', () => {
     });
 
     it('generates a valid payment intent with standard NPCI UPI URI and checkout link', async () => {
-      const intent = await razorpay.createPaymentIntent({
-        orderId: 'ord_12345',
-        orderNumber: 'P1001',
-        amountPaisa: 4800, // ₹48.00
-        customerPhone: '+919876543210',
-      });
+      const originalFetch = global.fetch;
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          id: 'plink_test_123',
+          short_url: 'https://rzp.io/i/plink_test_123',
+          expire_by: Math.floor(Date.now() / 1000) + 1800,
+        }),
+      } as any);
 
-      expect(intent.amountPaisa).toBe(4800);
-      expect(intent.currency).toBe('INR');
-      expect(intent.orderNumber).toBe('P1001');
-      expect(intent.upiIntentUrl).toContain('upi://pay?');
-      expect(intent.upiIntentUrl).toContain('pa=testshop@upi');
-      expect(intent.upiIntentUrl).toContain('am=48.00');
-      expect(intent.upiIntentUrl).toContain('tr=P1001');
-      expect(intent.paymentUrl).toContain('rzp.io/i/');
+      try {
+        const intent = await razorpay.createPaymentIntent({
+          orderId: 'ord_12345',
+          orderNumber: 'P1001',
+          amountPaisa: 4800, // ₹48.00
+          customerPhone: '+919876543210',
+        });
+
+        expect(intent.amountPaisa).toBe(4800);
+        expect(intent.currency).toBe('INR');
+        expect(intent.orderNumber).toBe('P1001');
+        expect(intent.upiIntentUrl).toContain('upi://pay?');
+        expect(intent.upiIntentUrl).toContain('pa=testshop@upi');
+        expect(intent.upiIntentUrl).toContain('am=48.00');
+        expect(intent.upiIntentUrl).toContain('tr=P1001');
+        expect(intent.paymentUrl).toContain('rzp.io/i/');
+      } finally {
+        global.fetch = originalFetch;
+      }
     });
 
     it('verifies a valid webhook payload with correct HMAC-SHA256 signature', async () => {

@@ -17,6 +17,9 @@ export function getPaymentProvider(): IPaymentProvider {
   if (providerType === 'razorpay' || process.env.RAZORPAY_KEY_ID) {
     cachedPaymentProvider = new RazorpayPaymentProvider();
   } else {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('PAYMENT_PROVIDER=razorpay is required in production. Mock payments are disabled.');
+    }
     cachedPaymentProvider = new MockPaymentProvider();
   }
 

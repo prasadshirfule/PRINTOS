@@ -98,7 +98,7 @@ export interface IPrintOSRepository {
   // Agents & Printers
   authenticateAgent(providedKey: string): Promise<PrintAgent | null>;
   recordAgentHeartbeat(
-    agentName: string,
+    agentId: string,
     printerStatus: PrinterStatus,
     capabilities?: Record<string, unknown>,
     version?: string

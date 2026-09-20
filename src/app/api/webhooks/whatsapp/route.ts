@@ -61,19 +61,16 @@ export async function POST(req: NextRequest) {
     const provider = (process.env.WHATSAPP_PROVIDER || '').toLowerCase();
     const isProduction = process.env.NODE_ENV === 'production';
 
-    // Production guard: enforce webhook secret for OpenWA in production
-    if (isProduction && provider === 'openwa' && !openwaSecret) {
-      logger.error('Missing OPENWA_WEBHOOK_SECRET in production');
-      return NextResponse.json(
-        { error: 'Server configuration error: OPENWA_WEBHOOK_SECRET is required in production' },
-        { status: 500 }
-      );
+    // Select exactly one provider and make signatures mandatory in production.
+    // Development remains permissive to support local provider emulators.
+    if (isProduction && !['openwa', 'meta'].includes(provider)) {
+      return NextResponse.json({ error: 'Server webhook provider is not configured.' }, { status: 503 });
     }
 
-    // 1. Verify OpenWA HMAC-SHA256 signature if configured or header present
-    if (openwaSecret || openwaSignatureHeader) {
+    // 1. Verify OpenWA HMAC-SHA256 signature.
+    if (provider === 'openwa' || (!provider && (openwaSecret || openwaSignatureHeader))) {
       if (!openwaSecret) {
-        return NextResponse.json({ error: 'Server webhook secret not configured' }, { status: 500 });
+        return NextResponse.json({ error: 'Server OpenWA webhook secret is not configured' }, { status: 503 });
       }
 
       if (!openwaSignatureHeader || !openwaSignatureHeader.startsWith('sha256=')) {
@@ -99,8 +96,11 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 2. Verify Meta HMAC-SHA256 signature if configured and OpenWA signature was not used
-    if (metaSecret && !openwaSignatureHeader) {
+    // 2. Verify Meta HMAC-SHA256 signature.
+    if (provider === 'meta' || (!provider && (metaSecret || metaSignatureHeader))) {
+      if (!metaSecret) {
+        return NextResponse.json({ error: 'Server Meta webhook secret is not configured' }, { status: 503 });
+      }
       if (!metaSignatureHeader || !metaSignatureHeader.startsWith('sha256=')) {
         logger.warn('Missing or malformed Meta signature header', { clientIp });
         return NextResponse.json({ error: 'Missing or malformed signature header' }, { status: 401 });

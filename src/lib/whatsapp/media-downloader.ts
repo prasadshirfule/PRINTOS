@@ -1,7 +1,6 @@
-import { createClient } from '@supabase/supabase-js';
 import { IWhatsAppProvider } from '@/types/whatsapp';
 import { DefaultDocumentInspector, DocumentInspectionResult } from '@/lib/storage/document-inspector';
-import { LocalStorageService } from '@/lib/storage/storage-service';
+import { getStorageService, IStorageService } from '@/lib/storage/storage-service';
 import crypto from 'crypto';
 
 export const MAX_MEDIA_FILE_SIZE_BYTES = 52428800; // 50MB
@@ -60,11 +59,15 @@ export function detectMagicBytes(buffer: Buffer): 'pdf' | 'jpg' | 'png' | null {
 
 export class WhatsAppMediaDownloader {
   private inspector: DefaultDocumentInspector;
-  private localStorage: LocalStorageService;
+  private customStorageService?: IStorageService;
 
-  constructor() {
+  constructor(customStorageService?: IStorageService) {
     this.inspector = new DefaultDocumentInspector(MAX_MEDIA_FILE_SIZE_BYTES);
-    this.localStorage = new LocalStorageService();
+    this.customStorageService = customStorageService;
+  }
+
+  private getStorage(): IStorageService {
+    return this.customStorageService || getStorageService();
   }
 
   /**
@@ -158,30 +161,12 @@ export class WhatsAppMediaDownloader {
   }
 
   private async saveToStorage(storagePath: string, buffer: Buffer, contentType: string): Promise<void> {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    const hasSupabaseStorage =
-      Boolean(supabaseUrl && serviceRoleKey) && !supabaseUrl?.includes('your-supabase-project');
-
-    if (hasSupabaseStorage) {
-      const supabase = createClient(supabaseUrl!, serviceRoleKey!, {
-        auth: { persistSession: false },
-      });
-
-      const { error } = await supabase.storage
-        .from('print-documents')
-        .upload(storagePath, buffer, {
-          contentType,
-          upsert: true,
-        });
-
-      if (error) {
-        throw new MediaIngestionError(`Failed to upload media to Supabase storage: ${error.message}`);
-      }
-      return;
+    try {
+      await this.getStorage().uploadDocument(storagePath, buffer, contentType);
+    } catch (err: unknown) {
+      throw new MediaIngestionError(
+        `Failed to upload media to storage: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
-
-    // LocalStorage fallback for tests and development without Supabase
-    await this.localStorage.uploadDocument(storagePath, buffer);
   }
 }

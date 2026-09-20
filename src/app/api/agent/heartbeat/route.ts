@@ -15,9 +15,9 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { agentName = agent.agentName, printerStatus = 'ONLINE', capabilities, version = '1.0.0' } = body;
+    const { printerStatus = 'ONLINE', capabilities, version = '1.0.0' } = body;
 
-    const updatedAgent = await repo.recordAgentHeartbeat(agentName, printerStatus, capabilities, version);
+    const updatedAgent = await repo.recordAgentHeartbeat(agent.id, printerStatus, capabilities, version);
 
     return NextResponse.json({
       ok: true,

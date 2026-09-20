@@ -98,7 +98,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const conv = await repo.getConversation(order.customerPhone);
+    const conv = await repo.getConversation(order.customerPhone, order.shopId || undefined);
 
     // Case 1: Standard Payment for Active Pending Order (or AWAITING_PAYMENT / CONFIGURING / RECEIVED)
     if (order.status === 'AWAITING_PAYMENT' || order.status === 'CONFIGURING' || order.status === 'RECEIVED') {
@@ -140,7 +140,8 @@ export async function POST(req: NextRequest) {
             paymentStatus: 'PAID',
           },
           updatedOrder.id,
-          conv.version
+          conv.version,
+          order.shopId || undefined
         );
 
         await WhatsAppOutboxService.queueText(
@@ -187,7 +188,8 @@ export async function POST(req: NextRequest) {
               paymentStatus: 'PAID',
             },
             updatedOrder.id,
-            conv.version
+            conv.version,
+            order.shopId || undefined
           );
 
           await WhatsAppOutboxService.queueText(
@@ -229,7 +231,8 @@ export async function POST(req: NextRequest) {
               paymentStatus: 'PAID_NON_FULFILLABLE',
             },
             order.id,
-            conv.version
+            conv.version,
+            order.shopId || undefined
           );
 
           await WhatsAppOutboxService.queueText(

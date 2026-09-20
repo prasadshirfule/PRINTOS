@@ -17,9 +17,13 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    const auth = await verifyAdminAuth(req);
+    if (!auth.authorized || !auth.user) {
+      return NextResponse.json({ error: auth.error || 'Unauthorized' }, { status: 401 });
+    }
+
     const body = await req.json();
     const {
-      shopId = DEFAULT_SHOP_ID,
       customerPhone,
       customerName,
       originalFilename = 'document.pdf',
@@ -32,6 +36,10 @@ export async function POST(req: NextRequest) {
       copies = 1,
       pageSelection,
     } = body;
+
+    if (body.shopId && body.shopId !== auth.user.shopId) {
+      return NextResponse.json({ error: 'Cannot create an order for another shop.' }, { status: 403 });
+    }
 
     if (!customerPhone) {
       return NextResponse.json({ error: 'customerPhone is required' }, { status: 400 });
@@ -49,17 +57,17 @@ export async function POST(req: NextRequest) {
 
     const repo = getRepository();
     const orderId = crypto.randomUUID();
-    const orderNumber = `P${Math.floor(1000 + Math.random() * 9000)}`;
+    const orderNumber = `P-${crypto.randomUUID()}`;
 
     const order: PrintOrder = {
       id: orderId,
-      shopId,
+      shopId: auth.user.shopId || DEFAULT_SHOP_ID,
       orderNumber,
       customerPhone,
       customerName,
       status: 'AWAITING_PAYMENT',
-      originalFilename,
-      storagePath: `orders/${orderId}/${originalFilename}`,
+      originalFilename: String(originalFilename).replace(/[^a-zA-Z0-9._-]/g, '_'),
+      storagePath: `orders/${orderId}/${String(originalFilename).replace(/[^a-zA-Z0-9._-]/g, '_')}`,
       fileType: fileType as FileType,
       fileSize: Number(fileSize),
       pageCount: Number(pageCount),

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
 import { getRepository } from '@/lib/repository';
+import { getStorageService, isSupabaseStorageConfigured } from '@/lib/storage/storage-service';
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   try {
@@ -41,31 +41,15 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       return NextResponse.json({ error: 'Order associated with job not found.' }, { status: 404 });
     }
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    const hasSupabaseStorage =
-      Boolean(supabaseUrl && serviceRoleKey) &&
-      !supabaseUrl?.includes('your-supabase-project');
+    const hasSupabaseStorage = isSupabaseStorageConfigured();
 
     if (hasSupabaseStorage) {
       // Production: Generate short-lived signed URL from private Supabase Storage
-      const supabase = createClient(supabaseUrl!, serviceRoleKey!, {
-        auth: { persistSession: false },
-      });
-
-      const { data: signedData, error: signedError } = await supabase.storage
-        .from('print-documents')
-        .createSignedUrl(order.storagePath, 300); // 5 minutes validity
-
-      if (signedError || !signedData?.signedUrl) {
-        return NextResponse.json(
-          { error: `Failed to generate signed document URL: ${signedError?.message || 'Storage error'}` },
-          { status: 500 }
-        );
-      }
+      const storage = getStorageService();
+      const signedUrl = await storage.createSignedUrl(order.storagePath, 300); // 5 minutes validity
 
       return NextResponse.json({
-        downloadUrl: signedData.signedUrl,
+        downloadUrl: signedUrl,
         expiresInSeconds: 300,
         filename: order.originalFilename,
       });

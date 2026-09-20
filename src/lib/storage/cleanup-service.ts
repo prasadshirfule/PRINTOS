@@ -1,6 +1,5 @@
 import { IPrintOSRepository } from '@/lib/repository';
-import { LocalStorageService } from './storage-service';
-import { createClient } from '@supabase/supabase-js';
+import { getStorageService } from './storage-service';
 
 export interface CleanupResult {
   purgedFilesCount: number;
@@ -25,25 +24,12 @@ export class CleanupService {
     };
 
     const cutoffTime = new Date(Date.now() - retentionHours * 3600 * 1000).toISOString();
-    const localStorage = new LocalStorageService();
-
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    const hasSupabase =
-      Boolean(supabaseUrl && serviceRoleKey) &&
-      !supabaseUrl?.includes('your-supabase-project');
-
-    let supabase: any = null;
-    if (hasSupabase) {
-      supabase = createClient(supabaseUrl!, serviceRoleKey!, {
-        auth: { persistSession: false },
-      });
-    }
+    const storage = getStorageService();
 
     try {
       // 1. Fetch orders in terminal states (COMPLETED, FAILED, CANCELLED, EXPIRED)
       const terminalStatuses = ['COMPLETED', 'FAILED', 'CANCELLED', 'EXPIRED'] as const;
-      const allOrders = await repo.listOrders({ limit: 500 });
+      const allOrders = await repo.listOrders();
 
       const eligibleOrders = allOrders.filter((order) => {
         const isTerminal = terminalStatuses.includes(order.status as any);
@@ -56,11 +42,7 @@ export class CleanupService {
         try {
           if (order.storagePath) {
             // Attempt storage deletion
-            if (supabase) {
-              await supabase.storage.from('print-documents').remove([order.storagePath]);
-            } else {
-              await localStorage.deleteDocument(order.storagePath);
-            }
+            await storage.deleteDocument(order.storagePath);
 
             result.purgedFilesCount++;
             await repo.recordOrderEvent(

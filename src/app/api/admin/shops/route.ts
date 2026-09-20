@@ -11,7 +11,6 @@ export async function GET(req: NextRequest) {
   if (!auth.authorized || !auth.user) {
     return NextResponse.json({ error: auth.error || 'Unauthorized' }, { status: 401 });
   }
-
   const repo = getRepository();
   const userShopId = auth.user.shopId;
 
@@ -62,6 +61,9 @@ export async function POST(req: NextRequest) {
   const auth = await verifyAdminAuth(req);
   if (!auth.authorized || !auth.user) {
     return NextResponse.json({ error: auth.error || 'Unauthorized' }, { status: 401 });
+  }
+  if (auth.user.shopId !== DEFAULT_SHOP_ID) {
+    return NextResponse.json({ error: 'Only the platform administrator can create shops.' }, { status: 403 });
   }
 
   const repo = getRepository();

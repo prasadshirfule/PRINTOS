@@ -40,6 +40,7 @@ describe('Production Environment Validator', () => {
       RAZORPAY_WEBHOOK_SECRET: 'rzp_wh_789',
       WHATSAPP_PROVIDER: 'openwa',
       OPENWA_API_URL: 'http://localhost:2785',
+      OPENWA_WEBHOOK_SECRET: 'whsec_prod_secret_123',
     };
 
     const result = ProductionEnvValidator.validate(validEnv);

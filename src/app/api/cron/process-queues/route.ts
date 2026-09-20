@@ -18,14 +18,15 @@ export async function POST(req: NextRequest) {
 async function handleCron(req: NextRequest) {
   try {
     const cronSecret = process.env.CRON_SECRET;
-    if (cronSecret) {
-      const authHeader = req.headers.get('authorization');
-      const customHeader = req.headers.get('x-cron-secret');
-      const token = authHeader?.replace('Bearer ', '') || customHeader;
+    if (!cronSecret) {
+      return NextResponse.json({ error: 'Cron endpoint is not configured.' }, { status: 503 });
+    }
+    const authHeader = req.headers.get('authorization');
+    const customHeader = req.headers.get('x-cron-secret');
+    const token = authHeader?.replace('Bearer ', '') || customHeader;
 
-      if (token !== cronSecret) {
-        return NextResponse.json({ error: 'Unauthorized cron trigger' }, { status: 401 });
-      }
+    if (token !== cronSecret) {
+      return NextResponse.json({ error: 'Unauthorized cron trigger' }, { status: 401 });
     }
 
     const repo = getRepository();

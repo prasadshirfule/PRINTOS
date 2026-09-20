@@ -144,8 +144,7 @@ export async function verifyAdminToken(
  */
 export async function authenticateAdminLogin(
   email: string,
-  password: string,
-  requestedShopId?: string
+  password: string
 ): Promise<{ success: boolean; token?: string; user?: AdminUser; error?: string }> {
   const normalizedEmail = email.trim().toLowerCase();
 
@@ -169,7 +168,7 @@ export async function authenticateAdminLogin(
 
       if (!error && data.user) {
         const userMetadata = data.user.user_metadata || {};
-        const shopId = requestedShopId || userMetadata.shop_id || DEFAULT_SHOP_ID;
+        const shopId = userMetadata.shop_id || DEFAULT_SHOP_ID;
         const user: AdminUser = {
           id: data.user.id,
           email: data.user.email || normalizedEmail,
@@ -193,7 +192,7 @@ export async function authenticateAdminLogin(
       id: 'local-admin-01',
       email: defaultEmail,
       role: 'admin',
-      shopId: requestedShopId || DEFAULT_SHOP_ID,
+      shopId: DEFAULT_SHOP_ID,
     };
     const token = await createAdminToken(user);
     return { success: true, token, user };

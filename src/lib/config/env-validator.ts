@@ -96,18 +96,39 @@ export class ProductionEnvValidator {
       }
     }
 
-    // 5. Razorpay payment provider checks
+    // 5. Payment provider checks. A mock gateway must never be reachable in production.
     const paymentProvider = (env.PAYMENT_PROVIDER || '').toLowerCase();
+    if (isProduction && paymentProvider !== 'razorpay') {
+      errors.push('PAYMENT_PROVIDER must be set to "razorpay" in production; mock payments are development-only.');
+    }
     if (paymentProvider === 'razorpay' || env.RAZORPAY_KEY_ID) {
       if (!env.RAZORPAY_KEY_ID) missing.push('RAZORPAY_KEY_ID');
       if (!env.RAZORPAY_KEY_SECRET) missing.push('RAZORPAY_KEY_SECRET');
-      if (!env.RAZORPAY_WEBHOOK_SECRET) warnings.push('RAZORPAY_WEBHOOK_SECRET is recommended for verifying payment signatures.');
+      if (!env.RAZORPAY_WEBHOOK_SECRET) {
+        if (isProduction) {
+          missing.push('RAZORPAY_WEBHOOK_SECRET');
+          errors.push('RAZORPAY_WEBHOOK_SECRET is required to authenticate payment webhooks in production.');
+        } else {
+          warnings.push('RAZORPAY_WEBHOOK_SECRET is not configured; webhook signatures cannot be verified.');
+        }
+      }
     }
 
-    // 6. OpenWA provider checks
+    // 6. WhatsApp provider checks. Webhooks must have a configured HMAC secret.
     const waProvider = (env.WHATSAPP_PROVIDER || '').toLowerCase();
-    if (waProvider === 'openwa' || env.OPENWA_API_URL) {
-      if (!env.OPENWA_API_URL) missing.push('OPENWA_API_URL');
+    if (isProduction && !['openwa', 'meta'].includes(waProvider)) {
+      errors.push('WHATSAPP_PROVIDER must be explicitly set to "openwa" or "meta" in production.');
+    }
+    if (waProvider === 'openwa' || env.OPENWA_BASE_URL || env.OPENWA_API_URL) {
+      if (!env.OPENWA_BASE_URL && !env.OPENWA_API_URL) missing.push('OPENWA_BASE_URL');
+      if (isProduction && !env.OPENWA_WEBHOOK_SECRET) {
+        missing.push('OPENWA_WEBHOOK_SECRET');
+        errors.push('OPENWA_WEBHOOK_SECRET is required to authenticate WhatsApp webhooks in production.');
+      }
+    }
+    if (waProvider === 'meta' && isProduction && !env.WHATSAPP_APP_SECRET) {
+      missing.push('WHATSAPP_APP_SECRET');
+      errors.push('WHATSAPP_APP_SECRET is required to authenticate Meta WhatsApp webhooks in production.');
     }
 
     return {

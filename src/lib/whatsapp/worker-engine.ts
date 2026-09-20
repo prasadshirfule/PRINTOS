@@ -215,7 +215,7 @@ export class WhatsAppWorkerEngine {
     }
 
     // Advance conversation state machine
-    await WhatsAppStateMachine.processEvent(event, this.repo);
+    await WhatsAppStateMachine.processEvent(event, this.repo, item.shopId || undefined);
   }
 
   private async transmitOutboxItem(

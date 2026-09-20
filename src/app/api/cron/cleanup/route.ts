@@ -18,19 +18,23 @@ export async function POST(req: NextRequest) {
 async function handleCleanupCron(req: NextRequest) {
   try {
     const cronSecret = process.env.CRON_SECRET;
-    if (cronSecret) {
-      const authHeader = req.headers.get('authorization');
-      const customHeader = req.headers.get('x-cron-secret');
-      const token = authHeader?.replace('Bearer ', '') || customHeader;
+    if (!cronSecret) {
+      return NextResponse.json({ error: 'Cron endpoint is not configured.' }, { status: 503 });
+    }
+    const authHeader = req.headers.get('authorization');
+    const customHeader = req.headers.get('x-cron-secret');
+    const token = authHeader?.replace('Bearer ', '') || customHeader;
 
-      if (token !== cronSecret) {
-        return NextResponse.json({ error: 'Unauthorized cron trigger' }, { status: 401 });
-      }
+    if (token !== cronSecret) {
+      return NextResponse.json({ error: 'Unauthorized cron trigger' }, { status: 401 });
     }
 
     const url = new URL(req.url);
     const retentionHoursParam = url.searchParams.get('retentionHours');
     const retentionHours = retentionHoursParam ? Number(retentionHoursParam) : 24;
+    if (!Number.isInteger(retentionHours) || retentionHours < 1 || retentionHours > 24 * 365) {
+      return NextResponse.json({ error: 'retentionHours must be an integer between 1 and 8760.' }, { status: 400 });
+    }
 
     const repo = getRepository();
     const result = await CleanupService.runRetentionCleanup(repo, retentionHours);

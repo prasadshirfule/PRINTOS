@@ -20,6 +20,10 @@ export class RazorpayPaymentProvider implements IPaymentProvider {
     this.webhookSecret = config?.webhookSecret || process.env.RAZORPAY_WEBHOOK_SECRET || '';
     this.merchantVpa = config?.merchantVpa || process.env.UPI_MERCHANT_VPA || 'printos@upi';
     this.merchantName = config?.merchantName || process.env.UPI_MERCHANT_NAME || 'PRINTOS Print Shop';
+
+    if (process.env.NODE_ENV === 'production' && (!this.keyId || !this.keySecret || !this.webhookSecret)) {
+      throw new Error('Razorpay key ID, key secret, and webhook secret are required in production.');
+    }
   }
 
   /**
@@ -34,6 +38,7 @@ export class RazorpayPaymentProvider implements IPaymentProvider {
     let orderNumber: string;
     let amountPaisa: number;
     let customerPhone: string;
+    let customerName: string | null | undefined;
     let description: string;
 
     if (typeof optionsOrOrderId === 'object') {
@@ -41,32 +46,63 @@ export class RazorpayPaymentProvider implements IPaymentProvider {
       orderNumber = optionsOrOrderId.orderNumber || orderId;
       amountPaisa = optionsOrOrderId.amountPaisa;
       customerPhone = optionsOrOrderId.customerPhone;
+      customerName = optionsOrOrderId.customerName;
       description = optionsOrOrderId.description || `PRINTOS Order ${orderNumber}`;
     } else {
       orderId = optionsOrOrderId;
       orderNumber = orderId;
       amountPaisa = amountPaisaArg || 0;
       customerPhone = customerPhoneArg || '';
+      customerName = undefined;
       description = `PRINTOS Order ${orderNumber}`;
     }
 
-    const paymentId = `rp_order_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
-    const expiresAt = new Date(Date.now() + 20 * 60 * 1000).toISOString(); // 20 minutes expiration
+    if (!this.keyId || !this.keySecret) {
+      throw new Error('Razorpay key ID and key secret are required to create a payment link.');
+    }
 
-    const amountRupees = (amountPaisa / 100).toFixed(2);
-    const encodedMerchantName = encodeURIComponent(this.merchantName);
-    const encodedDescription = encodeURIComponent(description);
+    const auth = Buffer.from(`${this.keyId}:${this.keySecret}`).toString('base64');
+    const response = await fetch('https://api.razorpay.com/v1/payment_links', {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${auth}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        amount: amountPaisa,
+        currency: 'INR',
+        reference_id: `printos_${orderId}`,
+        description,
+        customer: {
+          ...(customerName ? { name: customerName } : {}),
+          contact: customerPhone.replace(/^\+/, ''),
+        },
+        notes: { printosOrderId: orderId, orderId },
+        reminder_enable: true,
+      }),
+    });
 
-    // Standard NPCI UPI URI Scheme format
-    const upiIntentUrl = `upi://pay?pa=${this.merchantVpa}&pn=${encodedMerchantName}&am=${amountRupees}&cu=INR&tr=${orderNumber}&tn=${encodedDescription}`;
-    const paymentUrl = `https://rzp.io/i/${paymentId}?order=${encodeURIComponent(orderId)}&amount=${amountPaisa}`;
+    if (!response.ok) {
+      throw new Error(`Razorpay payment-link creation failed (${response.status}): ${await response.text()}`);
+    }
+
+    const link = (await response.json()) as { id?: string; short_url?: string; expire_by?: number };
+    if (!link.id || !link.short_url) {
+      throw new Error('Razorpay did not return a payment link ID and short URL.');
+    }
+
+    const expiresAt = link.expire_by
+      ? new Date(link.expire_by * 1000).toISOString()
+      : new Date(Date.now() + 20 * 60 * 1000).toISOString();
+
+    const upiAmount = (amountPaisa / 100).toFixed(2);
+    const upiIntentUrl = `upi://pay?pa=${this.merchantVpa}&pn=${encodeURIComponent(this.merchantName)}&am=${upiAmount}&cu=INR&tr=${orderNumber}&tn=${encodeURIComponent(description)}`;
 
     return {
-      paymentId,
+      paymentId: link.id,
       amountPaisa,
       currency: 'INR',
-      paymentUrl,
-      qrPayload: upiIntentUrl,
+      paymentUrl: link.short_url,
       upiIntentUrl,
       orderNumber,
       expiresAt,
@@ -91,44 +127,41 @@ export class RazorpayPaymentProvider implements IPaymentProvider {
         normalizedHeaders['x-razorpay-signature-256'] ||
         '';
 
-      // Verify HMAC-SHA256 signature if webhook secret is configured
-      if (this.webhookSecret) {
-        if (!receivedSignature) {
-          return {
-            isValid: false,
-            orderId: '',
-            transactionId: '',
-            provider: 'RAZORPAY_UPI',
-            amountPaisa: 0,
-            status: 'FAILED',
-            rawPayload: {},
-            error: 'Missing X-Razorpay-Signature header',
-          };
-        }
+      if (!this.webhookSecret || !receivedSignature) {
+        return {
+          isValid: false,
+          orderId: '',
+          transactionId: '',
+          provider: 'RAZORPAY_UPI',
+          amountPaisa: 0,
+          status: 'FAILED',
+          rawPayload: {},
+          error: 'Missing X-Razorpay-Signature header',
+        };
+      }
 
-        const expectedSignature = crypto
-          .createHmac('sha256', this.webhookSecret)
-          .update(rawBody)
-          .digest('hex');
+      const expectedSignature = crypto
+        .createHmac('sha256', this.webhookSecret)
+        .update(rawBody)
+        .digest('hex');
 
-        const sigBuffer = Buffer.from(receivedSignature, 'utf8');
-        const expectedBuffer = Buffer.from(expectedSignature, 'utf8');
+      const sigBuffer = Buffer.from(receivedSignature, 'utf8');
+      const expectedBuffer = Buffer.from(expectedSignature, 'utf8');
 
-        if (
-          sigBuffer.length !== expectedBuffer.length ||
-          !crypto.timingSafeEqual(sigBuffer, expectedBuffer)
-        ) {
-          return {
-            isValid: false,
-            orderId: '',
-            transactionId: '',
-            provider: 'RAZORPAY_UPI',
-            amountPaisa: 0,
-            status: 'FAILED',
-            rawPayload: {},
-            error: 'Invalid Razorpay webhook signature',
-          };
-        }
+      if (
+        sigBuffer.length !== expectedBuffer.length ||
+        !crypto.timingSafeEqual(sigBuffer, expectedBuffer)
+      ) {
+        return {
+          isValid: false,
+          orderId: '',
+          transactionId: '',
+          provider: 'RAZORPAY_UPI',
+          amountPaisa: 0,
+          status: 'FAILED',
+          rawPayload: {},
+          error: 'Invalid Razorpay webhook signature',
+        };
       }
 
       const data = JSON.parse(rawBody);
@@ -145,8 +178,13 @@ export class RazorpayPaymentProvider implements IPaymentProvider {
         const p = data.payload.payment.entity;
         transactionId = p.id || `pay_${Date.now()}`;
         amountPaisa = typeof p.amount === 'number' ? p.amount : Math.round((Number(p.amount) || 0));
+        const paymentLink = data.payload?.payment_link?.entity;
         orderId =
+          p.notes?.printosOrderId ||
           p.notes?.orderId ||
+          paymentLink?.notes?.printosOrderId ||
+          paymentLink?.notes?.orderId ||
+          paymentLink?.reference_id?.replace(/^printos_/, '') ||
           p.notes?.order_id ||
           p.description?.match(/Order\s+([A-Za-z0-9-]+)/i)?.[1] ||
           p.order_id ||
@@ -162,7 +200,7 @@ export class RazorpayPaymentProvider implements IPaymentProvider {
         }
       } else {
         // Direct / simplified webhook payload format
-        orderId = data.orderId || data.order_id || data.notes?.orderId || '';
+        orderId = data.orderId || data.order_id || data.notes?.printosOrderId || data.notes?.orderId || '';
         transactionId = data.paymentId || data.transactionId || data.id || `pay_${Date.now()}`;
         amountPaisa = typeof data.amountPaisa === 'number' ? data.amountPaisa : data.amount || 0;
         status = data.status === 'SUCCESS' || data.status === 'captured' || data.event === 'payment.captured' ? 'SUCCESS' : 'FAILED';

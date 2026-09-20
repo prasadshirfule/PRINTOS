@@ -32,6 +32,7 @@ import {
   ResourceNotFoundError,
   StaleConversationVersionError,
 } from './repository.interface';
+import { getStorageBucket } from '@/lib/storage/storage-service';
 
 export class SupabasePrintOSRepository implements IPrintOSRepository {
   private supabase: SupabaseClient;
@@ -334,92 +335,21 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
       );
     }
 
-    const { data: existingTx } = await this.supabase
-      .from('payment_transactions')
-      .select('*')
-      .eq('provider', provider)
-      .eq('transaction_id', transactionId)
-      .maybeSingle();
-
-    if (existingTx || order.paymentStatus === 'PAID') {
-      const existingJob = await this.getJobByOrderId(orderId);
-      if (!existingJob) {
-        throw new Error('Order marked paid but print job missing in Supabase.');
-      }
-      return { order, job: existingJob, isDuplicate: true };
-    }
-
-    const { error: txError } = await this.supabase.from('payment_transactions').insert({
-      shop_id: order.shopId || DEFAULT_SHOP_ID,
-      order_id: orderId,
-      provider,
-      transaction_id: transactionId,
-      idempotency_key: `${provider}:${transactionId}`,
-      amount_paisa: order.totalAmountPaisa,
-      currency: order.currency,
-      status: 'SUCCESS',
-      raw_payload: { simulated: true },
+    const { data, error } = await this.supabase.rpc('process_verified_payment', {
+      p_order_id: orderId,
+      p_transaction_id: transactionId,
+      p_provider: provider,
+      p_amount_paisa: amountPaisa ?? order.totalAmountPaisa,
     });
-
-    if (txError) {
-      if (txError.code === '23505') {
-        const existingJob = await this.getJobByOrderId(orderId);
-        if (existingJob) {
-          return { order, job: existingJob, isDuplicate: true };
-        }
-      }
-      throw new Error(`Failed to record payment transaction: ${txError.message}`);
+    if (error || !data?.[0]?.job_id) {
+      throw new Error(`Supabase payment transaction failed: ${error?.message || 'payment RPC returned no job'}`);
     }
 
-    await this.updateOrderStatus(orderId, 'PAID', { transactionId, provider });
-    await this.supabase
-      .from('print_orders')
-      .update({ payment_status: 'PAID', payment_id: transactionId })
-      .eq('id', orderId);
-
-    await this.updateOrderStatus(orderId, 'QUEUED');
-
-    const { data: jobData, error: jobError } = await this.supabase
-      .from('print_jobs')
-      .insert({
-        shop_id: order.shopId || DEFAULT_SHOP_ID,
-        order_id: order.id,
-        printer_id: order.printerId || null,
-        agent_id: null,
-        status: 'QUEUED',
-        priority: 10,
-        attempt_count: 0,
-        max_attempts: 3,
-        document_url: `/api/agent/jobs/${order.id}/document`,
-        print_options: {
-          copies: order.copies,
-          paperSize: order.paperSize,
-          colorMode: order.colorMode,
-          printSides: order.printSides,
-          pageSelection: order.pageSelection,
-        },
-      })
-      .select()
-      .single();
-
-    if (jobError) {
-      if (jobError.code === '23505') {
-        const existingJob = await this.getJobByOrderId(orderId);
-        if (existingJob) {
-          return { order, job: existingJob, isDuplicate: true };
-        }
-      }
-      throw new Error(`Failed to create print job in Supabase: ${jobError.message}`);
+    const [updatedOrder, job] = await Promise.all([this.getOrder(orderId), this.getJob(data[0].job_id)]);
+    if (!updatedOrder || !job) {
+      throw new Error('Payment transaction committed without a retrievable order and job.');
     }
-
-    await this.recordOrderEvent(orderId, 'PRINT_QUEUED', 'Print job added to printer queue', {
-      jobId: jobData.id,
-      printerId: jobData.printer_id,
-      shopId: jobData.shop_id,
-    });
-
-    const updatedOrder = (await this.getOrder(orderId)) || order;
-    return { order: updatedOrder, job: this.mapJob(jobData), isDuplicate: false };
+    return { order: updatedOrder, job, isDuplicate: Boolean(data[0].is_duplicate) };
   }
 
   public async getJob(id: string): Promise<PrintJob | null> {
@@ -516,7 +446,7 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
       throw new ResourceNotFoundError('Job', jobId);
     }
 
-    if (job.agentId && job.agentId !== agentId) {
+    if (job.agentId !== agentId) {
       throw new UnauthorizedAgentJobError(agentId, jobId);
     }
 
@@ -579,7 +509,7 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
   }
 
   public async recordAgentHeartbeat(
-    agentName: string,
+    agentId: string,
     printerStatus: PrinterStatus,
     capabilities?: Record<string, unknown>,
     version = '1.0.0'
@@ -594,7 +524,7 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
         capabilities: capabilities || {},
         last_seen_at: now,
       })
-      .eq('agent_name', agentName)
+      .eq('id', agentId)
       .select()
       .single();
 
@@ -605,7 +535,7 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
     await this.supabase
       .from('printers')
       .update({ status: printerStatus, last_seen_at: now })
-      .eq('id', '00000000-0000-0000-0000-000000000001');
+      .eq('shop_id', data.shop_id);
 
     return this.mapAgent(data);
   }
@@ -703,7 +633,7 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
           version: existing.version + 1,
           last_interaction_at: now,
         })
-        .eq('customer_phone', conversation.customerPhone)
+        .eq('id', existing.id)
         .select()
         .single();
 
@@ -761,7 +691,7 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
         version: existing.version + 1,
         last_interaction_at: new Date().toISOString(),
       })
-      .eq('customer_phone', customerPhone);
+      .eq('id', existing.id);
 
     if (shopId) {
       query = query.eq('shop_id', shopId);
@@ -938,10 +868,28 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
     payload: WhatsAppOutboxPayload;
     shopId?: string;
   }): Promise<WhatsAppOutboxItem> {
+    let shopId = item.shopId;
+    if (!shopId && item.conversationId) {
+      const { data: conversation } = await this.supabase
+        .from('whatsapp_conversations')
+        .select('shop_id')
+        .eq('id', item.conversationId)
+        .maybeSingle();
+      shopId = conversation?.shop_id;
+    }
+    if (!shopId && item.orderId) {
+      const { data: order } = await this.supabase
+        .from('print_orders')
+        .select('shop_id')
+        .eq('id', item.orderId)
+        .maybeSingle();
+      shopId = order?.shop_id;
+    }
+
     const { data, error } = await this.supabase
       .from('whatsapp_outbox')
       .insert({
-        shop_id: item.shopId || DEFAULT_SHOP_ID,
+        shop_id: shopId || DEFAULT_SHOP_ID,
         conversation_id: item.conversationId || null,
         order_id: item.orderId || null,
         recipient_phone: item.recipientPhone,
@@ -1131,10 +1079,11 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
       const parts = storagePath.split('/');
       const folder = parts.slice(0, -1).join('/');
       const filename = parts[parts.length - 1];
+      const bucket = getStorageBucket();
       const { data, error } = await this.supabase.storage
-        .from('print-documents')
+        .from(bucket)
         .list(folder, { search: filename, limit: 1 });
-      return !error && data && data.length > 0;
+      return !error && Boolean(data && data.length > 0);
     } catch {
       return false;
     }

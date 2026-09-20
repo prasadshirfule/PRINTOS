@@ -74,7 +74,7 @@ Run the SQL migration scripts in order using the **SQL Editor** in the Supabase 
 ### Step 2.3: Configure Private Document Storage Bucket
 1. Go to **Storage** in the Supabase Dashboard.
 2. Click **New Bucket**:
-   - **Name**: `printos-documents`
+   - **Name**: `print-documents` (default; can be customized using `PRINTOS_STORAGE_BUCKET`)
    - **Public Bucket**: **OFF** (Keep unchecked — customer documents must remain private).
 3. Under Storage **Policies**, ensure that only service-role tokens have read/write permissions.
 

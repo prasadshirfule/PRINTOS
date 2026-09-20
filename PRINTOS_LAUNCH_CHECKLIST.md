@@ -20,7 +20,7 @@ Before initiating functional tests, verify that all underlying infrastructure, a
 - [ ] WhatsApp inbox & outbox migration `00003_whatsapp_schema.sql` applied successfully.
 - [ ] Multi-tenancy migration `00004_multi_shop_schema.sql` applied successfully.
 - [ ] Development seed (`00002_development_seed.sql`) is **NOT** applied in production.
-- [ ] Private document storage bucket `printos-documents` created with **Public = False**.
+- [ ] Private document storage bucket `print-documents` created with **Public = False** (overrideable via `PRINTOS_STORAGE_BUCKET`).
 - [ ] Supabase Auth configured with initial admin/staff user and `shop_id` metadata.
 
 ### 2. Cloud Backend Deployment (Vercel)

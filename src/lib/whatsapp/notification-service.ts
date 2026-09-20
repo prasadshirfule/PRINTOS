@@ -14,7 +14,7 @@ export class NotificationService {
     newStatus: OrderStatus,
     reason?: string
   ): Promise<void> {
-    const conv = await repo.getConversation(order.customerPhone);
+    const conv = await repo.getConversation(order.customerPhone, order.shopId || undefined);
     let messageText = '';
     let targetState: ConversationState | null = null;
 
@@ -86,7 +86,8 @@ export class NotificationService {
           orderStatus: newStatus,
         },
         order.id,
-        conv.version
+        conv.version,
+        order.shopId || undefined
       );
     }
   }

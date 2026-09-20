@@ -4,7 +4,7 @@ import {
   InboundWhatsAppEvent,
   WhatsAppConversation,
 } from '@/types/whatsapp';
-import { PrintOrder, ColorMode, PrintSides } from '@/types/printos';
+import { PrintOrder, ColorMode, PrintSides, DEFAULT_SHOP_ID } from '@/types/printos';
 import { IPrintOSRepository } from '@/lib/repository';
 import { WhatsAppOutboxService } from './outbox-service';
 import { calculatePrintOrderPrice } from '@/lib/pricing/pricing-engine';
@@ -26,16 +26,18 @@ export class WhatsAppStateMachine {
    */
   public static async processEvent(
     event: InboundWhatsAppEvent,
-    repo: IPrintOSRepository
+    repo: IPrintOSRepository,
+    shopId = DEFAULT_SHOP_ID
   ): Promise<WhatsAppConversation> {
     const customerPhone = event.from;
     const now = Date.now();
 
     // 1. Fetch or initialize conversation
-    let conv = await repo.getConversation(customerPhone);
+    let conv = await repo.getConversation(customerPhone, shopId);
     if (!conv) {
       conv = await repo.upsertConversation({
         customerPhone,
+        shopId,
         customerName: event.name || null,
         currentState: 'IDLE',
       });
@@ -71,7 +73,8 @@ export class WhatsAppStateMachine {
         'EXPIRED',
         {},
         null,
-        conv.version
+        conv.version,
+        conv.shopId || shopId
       );
       await WhatsAppOutboxService.queueText(
         repo,
@@ -87,7 +90,7 @@ export class WhatsAppStateMachine {
     const rawText = (event.text || '').toLowerCase().trim();
     const isReset = rawText === 'reset' || rawText === 'clear';
     if (isReset) {
-      conv = await repo.updateConversationState(customerPhone, 'IDLE', {}, null, conv.version);
+      conv = await repo.updateConversationState(customerPhone, 'IDLE', {}, null, conv.version, conv.shopId || shopId);
       await WhatsAppOutboxService.queueText(
         repo,
         customerPhone,
@@ -103,7 +106,7 @@ export class WhatsAppStateMachine {
       ['cancel', 'stop', 'quit', 'abort'].includes(rawText);
 
     if (isCancel && conv.currentState !== 'IDLE' && conv.currentState !== 'ORDER_QUEUED' && conv.currentState !== 'ORDER_PRINTING' && conv.currentState !== 'ORDER_COMPLETED') {
-      conv = await repo.updateConversationState(customerPhone, 'CANCELLED', {}, null, conv.version);
+      conv = await repo.updateConversationState(customerPhone, 'CANCELLED', {}, null, conv.version, conv.shopId || shopId);
       await WhatsAppOutboxService.queueText(
         repo,
         customerPhone,
@@ -173,7 +176,8 @@ export class WhatsAppStateMachine {
       'AWAITING_DOCUMENT',
       {},
       null,
-      conv.version
+      conv.version,
+      conv.shopId || DEFAULT_SHOP_ID
     );
 
     await WhatsAppOutboxService.queueText(
@@ -255,7 +259,8 @@ export class WhatsAppStateMachine {
       'COLLECTING_COLOR',
       sessionData,
       null,
-      conv.version
+      conv.version,
+      conv.shopId || DEFAULT_SHOP_ID
     );
 
     await WhatsAppOutboxService.queueButtons(
@@ -316,7 +321,8 @@ export class WhatsAppStateMachine {
       'COLLECTING_SIDES',
       sessionData,
       null,
-      conv.version
+      conv.version,
+      conv.shopId || DEFAULT_SHOP_ID
     );
 
     await WhatsAppOutboxService.queueButtons(
@@ -377,7 +383,8 @@ export class WhatsAppStateMachine {
       'COLLECTING_COPIES',
       sessionData,
       null,
-      conv.version
+      conv.version,
+      conv.shopId || DEFAULT_SHOP_ID
     );
 
     await WhatsAppOutboxService.queueText(
@@ -429,7 +436,8 @@ export class WhatsAppStateMachine {
       'COLLECTING_PAGES',
       sessionData,
       null,
-      conv.version
+      conv.version,
+      conv.shopId || DEFAULT_SHOP_ID
     );
 
     await WhatsAppOutboxService.queueButtons(
@@ -506,7 +514,8 @@ export class WhatsAppStateMachine {
       'CONFIRMING_ORDER',
       sessionData,
       null,
-      conv.version
+      conv.version,
+      conv.shopId || DEFAULT_SHOP_ID
     );
 
     const priceRupees = (pricing.totalAmountPaisa / 100).toFixed(2);
@@ -550,6 +559,7 @@ export class WhatsAppStateMachine {
 
       const order: PrintOrder = {
         id: orderId,
+        shopId: conv.shopId || DEFAULT_SHOP_ID,
         orderNumber,
         customerPhone: conv.customerPhone,
         customerName: conv.customerName,
@@ -580,7 +590,8 @@ export class WhatsAppStateMachine {
         'AWAITING_PAYMENT',
         s,
         orderId,
-        conv.version
+        conv.version,
+        conv.shopId || DEFAULT_SHOP_ID
       );
 
       const paymentProvider = getPaymentProvider();

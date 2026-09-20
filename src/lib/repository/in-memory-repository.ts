@@ -47,6 +47,10 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
   private storedDocuments: Set<string> = new Set();
   private claimLock = false;
 
+  private conversationKey(customerPhone: string, shopId?: string | null): string {
+    return `${shopId || DEFAULT_SHOP_ID}:${customerPhone}`;
+  }
+
   constructor() {
     this.seedDefaults();
   }
@@ -399,7 +403,7 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
       throw new ResourceNotFoundError('Job', jobId);
     }
 
-    if (job.agentId && job.agentId !== agentId) {
+    if (job.agentId !== agentId) {
       throw new UnauthorizedAgentJobError(agentId, jobId);
     }
 
@@ -453,46 +457,29 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
   }
 
   public async recordAgentHeartbeat(
-    agentName: string,
+    agentId: string,
     printerStatus: PrinterStatus,
     capabilities?: Record<string, unknown>,
     version = '1.0.0'
   ): Promise<PrintAgent> {
-    let agent: PrintAgent | undefined;
-    for (const a of this.agents.values()) {
-      if (a.agentName === agentName) {
-        agent = a;
-        break;
-      }
-    }
+    const agent = this.agents.get(agentId);
 
     const now = new Date().toISOString();
     if (!agent) {
-      agent = {
-        id: crypto.randomUUID(),
-        shopId: DEFAULT_SHOP_ID,
-        agentName,
-        apiKeyHash: '9b66236b285b0d09a5b3a3c26b9a8cfefefb54cf21d2e1c4a035728a47401c10',
-        status: 'ONLINE',
-        version,
-        capabilities: capabilities || {},
-        lastSeenAt: now,
-        createdAt: now,
-      };
-      this.agents.set(agent.id, agent);
-    } else {
-      agent.status = 'ONLINE';
-      agent.lastSeenAt = now;
-      agent.version = version;
-      if (capabilities) agent.capabilities = capabilities;
-      this.agents.set(agent.id, agent);
+      throw new ResourceNotFoundError('Agent', agentId);
     }
+    agent.status = 'ONLINE';
+    agent.lastSeenAt = now;
+    agent.version = version;
+    if (capabilities) agent.capabilities = capabilities;
+    this.agents.set(agent.id, agent);
 
-    const printer = this.printers.get('00000000-0000-0000-0000-000000000001');
-    if (printer) {
-      printer.status = printerStatus;
-      printer.lastSeenAt = now;
-      this.printers.set(printer.id, printer);
+    for (const printer of this.printers.values()) {
+      if (printer.shopId === agent.shopId) {
+        printer.status = printerStatus;
+        printer.lastSeenAt = now;
+        this.printers.set(printer.id, printer);
+      }
     }
 
     return agent;
@@ -543,22 +530,21 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
   // Phase 2: WhatsApp Conversations & Locking
   // --------------------------------------------------------------------------
   public async getConversation(customerPhone: string, shopId?: string): Promise<WhatsAppConversation | null> {
-    const conv = this.conversations.get(customerPhone);
-    if (!conv) return null;
-    if (shopId && conv.shopId && conv.shopId !== shopId) return null;
-    return conv;
+    return this.conversations.get(this.conversationKey(customerPhone, shopId)) || null;
   }
 
   public async upsertConversation(
     conversation: Partial<WhatsAppConversation> & { customerPhone: string; shopId?: string | null }
   ): Promise<WhatsAppConversation> {
-    const existing = this.conversations.get(conversation.customerPhone);
+    const tenantShopId = conversation.shopId || DEFAULT_SHOP_ID;
+    const key = this.conversationKey(conversation.customerPhone, tenantShopId);
+    const existing = this.conversations.get(key);
     const now = new Date().toISOString();
 
     if (existing) {
       const updated: WhatsAppConversation = {
         ...existing,
-        shopId: conversation.shopId || existing.shopId || DEFAULT_SHOP_ID,
+        shopId: tenantShopId,
         customerName: conversation.customerName !== undefined ? conversation.customerName : existing.customerName,
         currentState: conversation.currentState || existing.currentState,
         activeOrderId: conversation.activeOrderId !== undefined ? conversation.activeOrderId : existing.activeOrderId,
@@ -567,13 +553,13 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
         lastInteractionAt: now,
         updatedAt: now,
       };
-      this.conversations.set(conversation.customerPhone, updated);
+      this.conversations.set(key, updated);
       return updated;
     }
 
     const created: WhatsAppConversation = {
       id: conversation.id || crypto.randomUUID(),
-      shopId: conversation.shopId || DEFAULT_SHOP_ID,
+      shopId: tenantShopId,
       customerPhone: conversation.customerPhone,
       customerName: conversation.customerName || null,
       currentState: conversation.currentState || 'IDLE',
@@ -584,7 +570,7 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
       createdAt: now,
       updatedAt: now,
     };
-    this.conversations.set(conversation.customerPhone, created);
+    this.conversations.set(key, created);
     return created;
   }
 
@@ -596,7 +582,8 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
     expectedVersion?: number,
     shopId?: string
   ): Promise<WhatsAppConversation> {
-    const conversation = this.conversations.get(customerPhone);
+    const key = this.conversationKey(customerPhone, shopId);
+    const conversation = this.conversations.get(key);
     if (!conversation) {
       throw new ResourceNotFoundError('Conversation', customerPhone);
     }
@@ -620,7 +607,7 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
       updatedAt: now,
     };
 
-    this.conversations.set(customerPhone, updated);
+    this.conversations.set(key, updated);
     return updated;
   }
 
@@ -763,9 +750,13 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
     shopId?: string;
   }): Promise<WhatsAppOutboxItem> {
     const now = new Date().toISOString();
+    const linkedConversation = item.conversationId
+      ? Array.from(this.conversations.values()).find((conversation) => conversation.id === item.conversationId)
+      : undefined;
+    const linkedOrder = item.orderId ? this.orders.get(item.orderId) : undefined;
     const outboxItem: WhatsAppOutboxItem = {
       id: crypto.randomUUID(),
-      shopId: item.shopId || DEFAULT_SHOP_ID,
+      shopId: item.shopId || linkedConversation?.shopId || linkedOrder?.shopId || DEFAULT_SHOP_ID,
       conversationId: item.conversationId || null,
       orderId: item.orderId || null,
       recipientPhone: item.recipientPhone,
