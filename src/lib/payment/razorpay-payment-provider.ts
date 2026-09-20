@@ -71,7 +71,7 @@ export class RazorpayPaymentProvider implements IPaymentProvider {
       body: JSON.stringify({
         amount: amountPaisa,
         currency: 'INR',
-        reference_id: `printos_${orderId}`,
+        reference_id: `po_${orderId}`,
         description,
         customer: {
           ...(customerName ? { name: customerName } : {}),
@@ -184,7 +184,7 @@ export class RazorpayPaymentProvider implements IPaymentProvider {
           p.notes?.orderId ||
           paymentLink?.notes?.printosOrderId ||
           paymentLink?.notes?.orderId ||
-          paymentLink?.reference_id?.replace(/^printos_/, '') ||
+          paymentLink?.reference_id?.replace(/^(printos_|po_)/, '') ||
           p.notes?.order_id ||
           p.description?.match(/Order\s+([A-Za-z0-9-]+)/i)?.[1] ||
           p.order_id ||
