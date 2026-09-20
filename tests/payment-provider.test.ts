@@ -109,7 +109,7 @@ describe('Payment Provider Abstraction Layer', () => {
         payload: {
           payment: {
             entity: {
-              id: 'pay_link_paid_123',
+              id: 'pay_link_paid_po_123',
               amount: 200,
               currency: 'INR',
               status: 'captured',
@@ -117,7 +117,7 @@ describe('Payment Provider Abstraction Layer', () => {
           },
           payment_link: {
             entity: {
-              id: 'plink_link_paid_123',
+              id: 'plink_link_paid_po_123',
               reference_id: `po_${testUuid}`,
             },
           },
@@ -139,6 +139,177 @@ describe('Payment Provider Abstraction Layer', () => {
       expect(verification.orderId).toBe(testUuid);
       expect(verification.amountPaisa).toBe(200);
       expect(verification.status).toBe('SUCCESS');
+    });
+
+    it('reconciles order ID from payment_link entity reference_id with legacy printos_ prefix', async () => {
+      const testUuid = '8d7c2a1e-5f3b-4c6d-9e0a-1b2c3d4e5f6a';
+      const payload = {
+        event: 'payment_link.paid',
+        payload: {
+          payment: {
+            entity: {
+              id: 'pay_link_paid_legacy_123',
+              amount: 200,
+              currency: 'INR',
+              status: 'captured',
+            },
+          },
+          payment_link: {
+            entity: {
+              id: 'plink_link_paid_legacy_123',
+              reference_id: `printos_${testUuid}`,
+            },
+          },
+        },
+      };
+
+      const rawBody = JSON.stringify(payload);
+      const signature = crypto
+        .createHmac('sha256', testWebhookSecret)
+        .update(rawBody)
+        .digest('hex');
+
+      const verification = await razorpay.verifyWebhook(
+        { 'x-razorpay-signature': signature },
+        rawBody
+      );
+
+      expect(verification.isValid).toBe(true);
+      expect(verification.orderId).toBe(testUuid);
+      expect(verification.amountPaisa).toBe(200);
+      expect(verification.status).toBe('SUCCESS');
+    });
+
+    it('omits customer.contact when customerPhone is a WhatsApp LID', async () => {
+      const originalFetch = global.fetch;
+      let capturedBody: any;
+
+      global.fetch = vi.fn().mockImplementation(async (_url: string, init: any) => {
+        capturedBody = JSON.parse(init.body);
+        return {
+          ok: true,
+          json: async () => ({
+            id: 'plink_lid_test',
+            short_url: 'https://rzp.io/i/plink_lid_test',
+            expire_by: Math.floor(Date.now() / 1000) + 1800,
+          }),
+        };
+      });
+
+      try {
+        await razorpay.createPaymentIntent({
+          orderId: 'ord_lid_123',
+          orderNumber: 'P1002',
+          amountPaisa: 500,
+          customerPhone: '20495684599884@lid',
+        });
+
+        expect(capturedBody).toBeDefined();
+        expect(capturedBody.customer).toBeUndefined();
+        expect(capturedBody.notes.printosOrderId).toBe('ord_lid_123');
+        expect(capturedBody.reference_id).toBe('po_ord_lid_123');
+      } finally {
+        global.fetch = originalFetch;
+      }
+    });
+
+    it('includes customer.name but omits customer.contact if customerName is provided for a WhatsApp LID user', async () => {
+      const originalFetch = global.fetch;
+      let capturedBody: any;
+
+      global.fetch = vi.fn().mockImplementation(async (_url: string, init: any) => {
+        capturedBody = JSON.parse(init.body);
+        return {
+          ok: true,
+          json: async () => ({
+            id: 'plink_lid_name_test',
+            short_url: 'https://rzp.io/i/plink_lid_name_test',
+            expire_by: Math.floor(Date.now() / 1000) + 1800,
+          }),
+        };
+      });
+
+      try {
+        await razorpay.createPaymentIntent({
+          orderId: 'ord_lid_name_123',
+          orderNumber: 'P1003',
+          amountPaisa: 500,
+          customerPhone: '20495684599884@lid',
+          customerName: 'Aarav Patel',
+        });
+
+        expect(capturedBody).toBeDefined();
+        expect(capturedBody.customer).toEqual({ name: 'Aarav Patel' });
+        expect(capturedBody.customer.contact).toBeUndefined();
+      } finally {
+        global.fetch = originalFetch;
+      }
+    });
+
+    it('sanitizes and includes customer.contact when customerPhone is a valid phone number with +', async () => {
+      const originalFetch = global.fetch;
+      let capturedBody: any;
+
+      global.fetch = vi.fn().mockImplementation(async (_url: string, init: any) => {
+        capturedBody = JSON.parse(init.body);
+        return {
+          ok: true,
+          json: async () => ({
+            id: 'plink_valid_phone_test',
+            short_url: 'https://rzp.io/i/plink_valid_phone_test',
+            expire_by: Math.floor(Date.now() / 1000) + 1800,
+          }),
+        };
+      });
+
+      try {
+        await razorpay.createPaymentIntent({
+          orderId: 'ord_phone_123',
+          orderNumber: 'P1004',
+          amountPaisa: 1200,
+          customerPhone: '+919876543210',
+          customerName: 'Priya Sharma',
+        });
+
+        expect(capturedBody).toBeDefined();
+        expect(capturedBody.customer).toEqual({
+          name: 'Priya Sharma',
+          contact: '919876543210',
+        });
+      } finally {
+        global.fetch = originalFetch;
+      }
+    });
+
+    it('omits customer.contact for invalid/garbage phone number strings', async () => {
+      const originalFetch = global.fetch;
+      let capturedBody: any;
+
+      global.fetch = vi.fn().mockImplementation(async (_url: string, init: any) => {
+        capturedBody = JSON.parse(init.body);
+        return {
+          ok: true,
+          json: async () => ({
+            id: 'plink_invalid_phone_test',
+            short_url: 'https://rzp.io/i/plink_invalid_phone_test',
+            expire_by: Math.floor(Date.now() / 1000) + 1800,
+          }),
+        };
+      });
+
+      try {
+        await razorpay.createPaymentIntent({
+          orderId: 'ord_invalid_phone_123',
+          orderNumber: 'P1005',
+          amountPaisa: 300,
+          customerPhone: '12345', // Too short, not a valid 10-14 digit number
+        });
+
+        expect(capturedBody).toBeDefined();
+        expect(capturedBody.customer).toBeUndefined();
+      } finally {
+        global.fetch = originalFetch;
+      }
     });
 
     it('verifies a valid webhook payload with correct HMAC-SHA256 signature', async () => {

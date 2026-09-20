@@ -62,6 +62,21 @@ export class RazorpayPaymentProvider implements IPaymentProvider {
     }
 
     const auth = Buffer.from(`${this.keyId}:${this.keySecret}`).toString('base64');
+    
+    const cleanCustomerPhone = customerPhone ? customerPhone.trim() : '';
+    const isRealPhone =
+      Boolean(cleanCustomerPhone) &&
+      !cleanCustomerPhone.includes('@') &&
+      /^\+?[1-9]\d{9,13}$/.test(cleanCustomerPhone);
+
+    const customerPayload: { name?: string; contact?: string } = {};
+    if (customerName?.trim()) {
+      customerPayload.name = customerName.trim();
+    }
+    if (isRealPhone) {
+      customerPayload.contact = cleanCustomerPhone.replace(/\D/g, '');
+    }
+
     const response = await fetch('https://api.razorpay.com/v1/payment_links', {
       method: 'POST',
       headers: {
@@ -73,10 +88,7 @@ export class RazorpayPaymentProvider implements IPaymentProvider {
         currency: 'INR',
         reference_id: `po_${orderId}`,
         description,
-        customer: {
-          ...(customerName ? { name: customerName } : {}),
-          contact: customerPhone.replace(/^\+/, ''),
-        },
+        ...(Object.keys(customerPayload).length > 0 ? { customer: customerPayload } : {}),
         notes: { printosOrderId: orderId, orderId },
         reminder_enable: true,
       }),
