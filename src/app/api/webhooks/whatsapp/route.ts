@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { waitUntil } from '@vercel/functions';
 import crypto from 'crypto';
 import { getRepository } from '@/lib/repository';
 import { WhatsAppInboxService } from '@/lib/whatsapp/inbox-service';
@@ -165,16 +166,18 @@ export async function POST(req: NextRequest) {
       sender: parsedEvents[0]?.from,
     });
 
-    // Eager best-effort asynchronous cycle trigger (Latency optimization only; Cron is authoritative)
+    // Eager best-effort asynchronous cycle trigger via Vercel waitUntil (Cron is authoritative)
     if (process.env.DISABLE_EAGER_WORKER !== 'true') {
       try {
         const worker = new WhatsAppWorkerEngine(repo);
-        worker.runCycle().catch((e) => {
-          logger.warn('Background worker cycle failed, deferring to cron', {
-            errorMessage: e instanceof Error ? e.message : String(e),
-            stack: e instanceof Error ? e.stack : undefined,
-          });
-        });
+        waitUntil(
+          worker.runCycle().catch((e) => {
+            logger.warn('Background worker cycle failed, deferring to cron', {
+              errorMessage: e instanceof Error ? e.message : String(e),
+              stack: e instanceof Error ? e.stack : undefined,
+            });
+          })
+        );
       } catch (workerErr) {
         logger.warn('Failed to start eager worker cycle, deferring to cron', {
           errorMessage: workerErr instanceof Error ? workerErr.message : String(workerErr),
