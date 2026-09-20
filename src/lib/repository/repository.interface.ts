@@ -109,10 +109,10 @@ export interface IPrintOSRepository {
   getDashboardMetrics(shopId?: string): Promise<DashboardMetrics>;
 
   // Phase 2: WhatsApp Conversations & Locking
-  getConversation(customerPhone: string, shopId?: string): Promise<WhatsAppConversation | null>;
-  upsertConversation(conversation: Partial<WhatsAppConversation> & { customerPhone: string; shopId?: string | null }): Promise<WhatsAppConversation>;
+  getConversation(customerPhoneOrChatId: string, shopId?: string): Promise<WhatsAppConversation | null>;
+  upsertConversation(conversation: Partial<WhatsAppConversation> & { customerPhone: string; whatsappChatId?: string | null; shopId?: string | null }): Promise<WhatsAppConversation>;
   updateConversationState(
-    customerPhone: string,
+    customerPhoneOrChatId: string,
     nextState: ConversationState,
     sessionData?: ConversationSessionData,
     activeOrderId?: string | null,

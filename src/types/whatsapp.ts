@@ -45,6 +45,7 @@ export interface WhatsAppButton {
 
 export interface ConversationSessionData {
   shopId?: string;
+  whatsappChatId?: string;
   documentPath?: string;
   originalFilename?: string;
   fileType?: FileType;
@@ -70,6 +71,7 @@ export interface WhatsAppConversation {
   id: string;
   shopId?: string | null;
   customerPhone: string;
+  whatsappChatId?: string | null;
   customerName?: string | null;
   currentState: ConversationState;
   activeOrderId?: string | null;

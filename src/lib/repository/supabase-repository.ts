@@ -596,11 +596,12 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
   // --------------------------------------------------------------------------
   // Phase 2: WhatsApp Conversations & Locking
   // --------------------------------------------------------------------------
-  public async getConversation(customerPhone: string, shopId?: string): Promise<WhatsAppConversation | null> {
+  public async getConversation(identifier: string, shopId?: string): Promise<WhatsAppConversation | null> {
+    const rawDigits = identifier.includes('@') ? identifier.split('@')[0] : identifier;
     let query = this.supabase
       .from('whatsapp_conversations')
       .select('*')
-      .eq('customer_phone', customerPhone);
+      .or(`whatsapp_chat_id.eq.${identifier},customer_phone.eq.${identifier},customer_phone.eq.${rawDigits}`);
 
     if (shopId) {
       query = query.eq('shop_id', shopId);
@@ -616,20 +617,27 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
   }
 
   public async upsertConversation(
-    conversation: Partial<WhatsAppConversation> & { customerPhone: string; shopId?: string | null }
+    conversation: Partial<WhatsAppConversation> & { customerPhone: string; whatsappChatId?: string | null; shopId?: string | null }
   ): Promise<WhatsAppConversation> {
-    const existing = await this.getConversation(conversation.customerPhone, conversation.shopId || undefined);
+    const identifier = conversation.whatsappChatId || conversation.customerPhone;
+    const existing = await this.getConversation(identifier, conversation.shopId || undefined);
     const now = new Date().toISOString();
+    const resolvedChatId = conversation.whatsappChatId || existing?.whatsappChatId || (conversation.customerPhone.includes('@') ? conversation.customerPhone : null);
 
     if (existing) {
       const { data, error } = await this.supabase
         .from('whatsapp_conversations')
         .update({
           shop_id: conversation.shopId || existing.shopId || DEFAULT_SHOP_ID,
+          whatsapp_chat_id: resolvedChatId || existing.whatsappChatId || null,
           customer_name: conversation.customerName !== undefined ? conversation.customerName : existing.customerName,
           current_state: conversation.currentState || existing.currentState,
           active_order_id: conversation.activeOrderId !== undefined ? conversation.activeOrderId : existing.activeOrderId,
-          session_data: conversation.sessionData ? { ...existing.sessionData, ...conversation.sessionData } : existing.sessionData,
+          session_data: {
+            ...existing.sessionData,
+            ...(conversation.sessionData || {}),
+            ...(resolvedChatId ? { whatsappChatId: resolvedChatId } : {}),
+          },
           version: existing.version + 1,
           last_interaction_at: now,
         })
@@ -649,10 +657,14 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
         id: conversation.id || crypto.randomUUID(),
         shop_id: conversation.shopId || DEFAULT_SHOP_ID,
         customer_phone: conversation.customerPhone,
+        whatsapp_chat_id: resolvedChatId || null,
         customer_name: conversation.customerName || null,
         current_state: conversation.currentState || 'IDLE',
         active_order_id: conversation.activeOrderId || null,
-        session_data: conversation.sessionData || {},
+        session_data: {
+          ...(conversation.sessionData || {}),
+          ...(resolvedChatId ? { whatsappChatId: resolvedChatId } : {}),
+        },
         version: 1,
         last_interaction_at: now,
       })
@@ -666,27 +678,36 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
   }
 
   public async updateConversationState(
-    customerPhone: string,
+    identifier: string,
     nextState: ConversationState,
     sessionData?: ConversationSessionData,
     activeOrderId?: string | null,
     expectedVersion?: number,
     shopId?: string
   ): Promise<WhatsAppConversation> {
-    const existing = await this.getConversation(customerPhone, shopId);
+    const existing = await this.getConversation(identifier, shopId);
     if (!existing) {
-      throw new ResourceNotFoundError('Conversation', customerPhone);
+      throw new ResourceNotFoundError('Conversation', identifier);
     }
 
     if (expectedVersion !== undefined && existing.version !== expectedVersion) {
-      throw new StaleConversationVersionError(customerPhone, expectedVersion);
+      throw new StaleConversationVersionError(identifier, expectedVersion);
+    }
+
+    const mergedSessionData: ConversationSessionData = {
+      ...existing.sessionData,
+      ...(sessionData !== undefined ? sessionData : {}),
+    };
+    if (existing.whatsappChatId && !mergedSessionData.whatsappChatId) {
+      mergedSessionData.whatsappChatId = existing.whatsappChatId;
     }
 
     let query = this.supabase
       .from('whatsapp_conversations')
       .update({
         current_state: nextState,
-        session_data: sessionData !== undefined ? sessionData : existing.sessionData,
+        session_data: mergedSessionData,
+        whatsapp_chat_id: existing.whatsappChatId || null,
         active_order_id: activeOrderId !== undefined ? activeOrderId : existing.activeOrderId,
         version: existing.version + 1,
         last_interaction_at: new Date().toISOString(),
@@ -704,7 +725,7 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
     const { data, error } = await query.select().single();
     if (error) {
       if (expectedVersion !== undefined) {
-        throw new StaleConversationVersionError(customerPhone, expectedVersion);
+        throw new StaleConversationVersionError(identifier, expectedVersion);
       }
       throw new Error(`Supabase updateConversationState failed: ${error.message}`);
     }
@@ -1182,6 +1203,7 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
       id: row.id,
       shopId: row.shop_id,
       customerPhone: row.customer_phone,
+      whatsappChatId: row.whatsapp_chat_id || row.session_data?.whatsappChatId || null,
       customerName: row.customer_name,
       currentState: row.current_state,
       activeOrderId: row.active_order_id,

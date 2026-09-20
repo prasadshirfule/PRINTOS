@@ -65,10 +65,15 @@ export class NotificationService {
         return;
     }
 
+    const recipient =
+      conv?.whatsappChatId ||
+      conv?.sessionData?.whatsappChatId ||
+      order.customerPhone;
+
     // Queue durable outbox notification
     await WhatsAppOutboxService.queueStatusAlert(
       repo,
-      order.customerPhone,
+      recipient,
       order.orderNumber,
       newStatus,
       conv?.id,

@@ -655,10 +655,10 @@ describe('OpenWA WhatsApp Provider & Webhook Integration Suite', () => {
     const { WhatsAppStateMachine } = await import('@/lib/whatsapp/state-machine');
     await WhatsAppStateMachine.processEvent(lidInboundEvent, testRepo);
 
-    // 2. Verify conversation was created with customerPhone = '20495684599884@lid'
+    // 2. Verify conversation was created with whatsappChatId = '20495684599884@lid'
     const conv = await testRepo.getConversation('20495684599884@lid');
     expect(conv).toBeDefined();
-    expect(conv?.customerPhone).toBe('20495684599884@lid');
+    expect(conv?.whatsappChatId).toBe('20495684599884@lid');
 
     // 3. Verify outbox queue contains item with recipientPhone = '20495684599884@lid'
     const outboxItems = await testRepo.claimOutboxBatch('test_worker', 10);

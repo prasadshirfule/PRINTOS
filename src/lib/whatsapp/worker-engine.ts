@@ -4,6 +4,7 @@ import { WhatsAppInboxItem, WhatsAppOutboxItem, InboundWhatsAppEvent } from '@/t
 import { WhatsAppStateMachine } from './state-machine';
 import { WhatsAppMediaDownloader } from './media-downloader';
 import { getWhatsAppProvider } from './provider';
+import { WhatsAppInboxService } from './inbox-service';
 
 export interface WorkerBatchResult {
   workerId: string;
@@ -175,19 +176,31 @@ export class WhatsAppWorkerEngine {
 
   private async processSingleInboxItem(item: WhatsAppInboxItem, _workerId: string): Promise<void> {
     const rawPayload = item.rawPayload;
-    const event: InboundWhatsAppEvent = {
-      wamid: item.messageId,
-      from: item.senderPhone,
-      timestamp: Date.now(),
-      type: (rawPayload.type as InboundWhatsAppEvent['type']) || 'text',
-      text: (rawPayload.text as string) || undefined,
-      buttonId: (rawPayload.buttonId as string) || undefined,
-      mediaId: (rawPayload.mediaId as string) || undefined,
-      mimeType: (rawPayload.mimeType as string) || undefined,
-      filename: (rawPayload.filename as string) || undefined,
-      fileSize: (rawPayload.fileSize as number) || undefined,
-      rawPayload,
-    };
+    const parsedEvents = WhatsAppInboxService.parseInboundPayload(rawPayload);
+    let event: InboundWhatsAppEvent;
+
+    if (parsedEvents.length > 0) {
+      const match = parsedEvents.find((e) => e.wamid === item.messageId) || parsedEvents[0];
+      event = {
+        ...match,
+        from: item.senderPhone || match.from,
+        rawPayload: { ...match.rawPayload, ...rawPayload },
+      };
+    } else {
+      event = {
+        wamid: item.messageId,
+        from: item.senderPhone,
+        timestamp: Date.now(),
+        type: (rawPayload.type as InboundWhatsAppEvent['type']) || 'text',
+        text: (rawPayload.text as string) || undefined,
+        buttonId: (rawPayload.buttonId as string) || undefined,
+        mediaId: (rawPayload.mediaId as string) || undefined,
+        mimeType: (rawPayload.mimeType as string) || undefined,
+        filename: (rawPayload.filename as string) || undefined,
+        fileSize: (rawPayload.fileSize as number) || undefined,
+        rawPayload,
+      };
+    }
 
     // If inbound event contains media, ingest and validate magic-bytes
     if (event.mediaId && (event.type === 'document' || event.type === 'image')) {

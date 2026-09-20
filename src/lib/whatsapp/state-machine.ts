@@ -22,6 +22,22 @@ export class WhatsAppStateMachine {
   public static readonly CONVERSATION_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
   /**
+   * Helper to resolve the exact WhatsApp chat transport recipient for replies
+   * Priority: event.from -> conv.whatsappChatId -> conv.sessionData.whatsappChatId -> conv.customerPhone
+   */
+  public static getReplyRecipient(
+    conv: WhatsAppConversation,
+    event?: InboundWhatsAppEvent
+  ): string {
+    return (
+      event?.from ||
+      conv.whatsappChatId ||
+      conv.sessionData?.whatsappChatId ||
+      conv.customerPhone
+    );
+  }
+
+  /**
    * Process an incoming normalized WhatsApp event for a customer
    */
   public static async processEvent(
@@ -29,19 +45,37 @@ export class WhatsAppStateMachine {
     repo: IPrintOSRepository,
     shopId = DEFAULT_SHOP_ID
   ): Promise<WhatsAppConversation> {
-    const customerPhone = event.from;
+    const incomingChatId = event.from;
     const now = Date.now();
 
     // 1. Fetch or initialize conversation
-    let conv = await repo.getConversation(customerPhone, shopId);
+    let conv = await repo.getConversation(incomingChatId, shopId);
     if (!conv) {
+      const rawUser = incomingChatId.includes('@') ? incomingChatId.split('@')[0] : incomingChatId;
       conv = await repo.upsertConversation({
-        customerPhone,
+        customerPhone: rawUser,
+        whatsappChatId: incomingChatId,
         shopId,
         customerName: event.name || null,
         currentState: 'IDLE',
+        sessionData: {
+          whatsappChatId: incomingChatId,
+        },
+      });
+    } else if (!conv.whatsappChatId || conv.whatsappChatId !== incomingChatId) {
+      conv = await repo.upsertConversation({
+        id: conv.id,
+        customerPhone: conv.customerPhone,
+        whatsappChatId: incomingChatId,
+        shopId: conv.shopId || shopId,
+        sessionData: {
+          ...conv.sessionData,
+          whatsappChatId: incomingChatId,
+        },
       });
     }
+
+    const recipient = this.getReplyRecipient(conv, event);
 
     // Record incoming message in audit log
     await repo.recordWhatsAppMessage({
@@ -69,16 +103,16 @@ export class WhatsAppStateMachine {
 
     if (isConfigState && now - lastInteraction > this.CONVERSATION_TTL_MS) {
       conv = await repo.updateConversationState(
-        customerPhone,
+        conv.customerPhone,
         'EXPIRED',
-        {},
+        { whatsappChatId: conv.whatsappChatId || incomingChatId },
         null,
         conv.version,
         conv.shopId || shopId
       );
       await WhatsAppOutboxService.queueText(
         repo,
-        customerPhone,
+        recipient,
         '⏰ Your previous session has timed out due to inactivity. Send "Hi" or upload a file to start a new print order.',
         conv.id,
         null
@@ -90,10 +124,17 @@ export class WhatsAppStateMachine {
     const rawText = (event.text || '').toLowerCase().trim();
     const isReset = rawText === 'reset' || rawText === 'clear';
     if (isReset) {
-      conv = await repo.updateConversationState(customerPhone, 'IDLE', {}, null, conv.version, conv.shopId || shopId);
+      conv = await repo.updateConversationState(
+        conv.customerPhone,
+        'IDLE',
+        { whatsappChatId: conv.whatsappChatId || incomingChatId },
+        null,
+        conv.version,
+        conv.shopId || shopId
+      );
       await WhatsAppOutboxService.queueText(
         repo,
-        customerPhone,
+        recipient,
         '🔄 Conversation reset. Send "Hi" or upload a file whenever you would like to start again.',
         conv.id,
         null
@@ -106,10 +147,17 @@ export class WhatsAppStateMachine {
       ['cancel', 'stop', 'quit', 'abort'].includes(rawText);
 
     if (isCancel && conv.currentState !== 'IDLE' && conv.currentState !== 'ORDER_QUEUED' && conv.currentState !== 'ORDER_PRINTING' && conv.currentState !== 'ORDER_COMPLETED') {
-      conv = await repo.updateConversationState(customerPhone, 'CANCELLED', {}, null, conv.version, conv.shopId || shopId);
+      conv = await repo.updateConversationState(
+        conv.customerPhone,
+        'CANCELLED',
+        { whatsappChatId: conv.whatsappChatId || incomingChatId },
+        null,
+        conv.version,
+        conv.shopId || shopId
+      );
       await WhatsAppOutboxService.queueText(
         repo,
-        customerPhone,
+        recipient,
         '❌ Order cancelled. Send "Hi" or upload a document whenever you would like to start again.',
         conv.id,
         conv.activeOrderId
@@ -171,10 +219,11 @@ export class WhatsAppStateMachine {
     conv: WhatsAppConversation,
     repo: IPrintOSRepository
   ): Promise<WhatsAppConversation> {
+    const recipient = this.getReplyRecipient(conv, event);
     const updated = await repo.updateConversationState(
       conv.customerPhone,
       'AWAITING_DOCUMENT',
-      {},
+      { whatsappChatId: conv.whatsappChatId || recipient },
       null,
       conv.version,
       conv.shopId || DEFAULT_SHOP_ID
@@ -182,7 +231,7 @@ export class WhatsAppStateMachine {
 
     await WhatsAppOutboxService.queueText(
       repo,
-      conv.customerPhone,
+      recipient,
       '👋 Welcome to *PRINTOS*!\n\nPlease send the PDF or image file you would like to print.',
       conv.id,
       null
@@ -196,10 +245,11 @@ export class WhatsAppStateMachine {
     conv: WhatsAppConversation,
     repo: IPrintOSRepository
   ): Promise<WhatsAppConversation> {
+    const recipient = this.getReplyRecipient(conv, event);
     if (event.type !== 'document' && event.type !== 'image' && !event.filename) {
       await WhatsAppOutboxService.queueText(
         repo,
-        conv.customerPhone,
+        recipient,
         '📄 Please attach a document (PDF, PNG, or JPG) to start your print order.',
         conv.id,
         null
@@ -214,13 +264,14 @@ export class WhatsAppStateMachine {
     conv: WhatsAppConversation,
     repo: IPrintOSRepository
   ): Promise<WhatsAppConversation> {
+    const recipient = this.getReplyRecipient(conv, event);
     const filename = event.filename || (event.text?.endsWith('.pdf') ? event.text : 'document.pdf');
     const ext = filename.split('.').pop()?.toLowerCase() || 'pdf';
 
     if (!['pdf', 'jpg', 'jpeg', 'png'].includes(ext)) {
       await WhatsAppOutboxService.queueText(
         repo,
-        conv.customerPhone,
+        recipient,
         '⚠️ Unsupported file format. Please send a valid PDF, JPG, or PNG file.',
         conv.id,
         null
@@ -231,7 +282,7 @@ export class WhatsAppStateMachine {
     if (event.fileSize && event.fileSize > 50 * 1024 * 1024) {
       await WhatsAppOutboxService.queueText(
         repo,
-        conv.customerPhone,
+        recipient,
         '⚠️ File exceeds the 50MB maximum size limit. Please upload a smaller file.',
         conv.id,
         null
@@ -245,6 +296,7 @@ export class WhatsAppStateMachine {
     const storagePath = `orders/${orderId}/${filename}`;
 
     const sessionData: ConversationSessionData = {
+      whatsappChatId: conv.whatsappChatId || recipient,
       originalFilename: filename,
       fileType: ext as any,
       fileSize: event.fileSize || 4096,
@@ -265,7 +317,7 @@ export class WhatsAppStateMachine {
 
     await WhatsAppOutboxService.queueButtons(
       repo,
-      conv.customerPhone,
+      recipient,
       `✅ Received *${filename}* (${pageCount} page${pageCount > 1 ? 's' : ''}).\n\nSelect your print color mode:`,
       [
         { id: 'btn_bw', title: 'Black & White' },
@@ -285,6 +337,7 @@ export class WhatsAppStateMachine {
     conv: WhatsAppConversation,
     repo: IPrintOSRepository
   ): Promise<WhatsAppConversation> {
+    const recipient = this.getReplyRecipient(conv, event);
     const text = (event.buttonId || event.text || '').toLowerCase().trim();
     let colorMode: ColorMode | null = null;
 
@@ -297,7 +350,7 @@ export class WhatsAppStateMachine {
     if (!colorMode) {
       await WhatsAppOutboxService.queueButtons(
         repo,
-        conv.customerPhone,
+        recipient,
         '⚠️ Please select a valid color mode option:',
         [
           { id: 'btn_bw', title: 'Black & White' },
@@ -313,6 +366,7 @@ export class WhatsAppStateMachine {
 
     const sessionData: ConversationSessionData = {
       ...conv.sessionData,
+      whatsappChatId: conv.whatsappChatId || recipient,
       colorMode,
     };
 
@@ -327,7 +381,7 @@ export class WhatsAppStateMachine {
 
     await WhatsAppOutboxService.queueButtons(
       repo,
-      conv.customerPhone,
+      recipient,
       `Color set to *${colorMode === 'BW' ? 'Black & White' : 'Color'}*.\n\nSelect print sides:`,
       [
         { id: 'btn_single', title: 'Single-Sided' },
@@ -347,6 +401,7 @@ export class WhatsAppStateMachine {
     conv: WhatsAppConversation,
     repo: IPrintOSRepository
   ): Promise<WhatsAppConversation> {
+    const recipient = this.getReplyRecipient(conv, event);
     const text = (event.buttonId || event.text || '').toLowerCase().trim();
     let printSides: PrintSides | null = null;
 
@@ -359,7 +414,7 @@ export class WhatsAppStateMachine {
     if (!printSides) {
       await WhatsAppOutboxService.queueButtons(
         repo,
-        conv.customerPhone,
+        recipient,
         '⚠️ Please select a valid print sides option:',
         [
           { id: 'btn_single', title: 'Single-Sided' },
@@ -375,6 +430,7 @@ export class WhatsAppStateMachine {
 
     const sessionData: ConversationSessionData = {
       ...conv.sessionData,
+      whatsappChatId: conv.whatsappChatId || recipient,
       printSides,
     };
 
@@ -389,7 +445,7 @@ export class WhatsAppStateMachine {
 
     await WhatsAppOutboxService.queueText(
       repo,
-      conv.customerPhone,
+      recipient,
       `Sides set to *${printSides === 'ONE_SIDED' ? 'Single-Sided' : 'Double-Sided'}*.\n\nHow many copies do you need? (Enter a number from 1 to 50):`,
       conv.id,
       null
@@ -403,13 +459,14 @@ export class WhatsAppStateMachine {
     conv: WhatsAppConversation,
     repo: IPrintOSRepository
   ): Promise<WhatsAppConversation> {
+    const recipient = this.getReplyRecipient(conv, event);
     const raw = (event.text || '').trim();
     const copies = parseInt(raw, 10);
 
     if (isNaN(copies) || copies < 1 || copies > 50) {
       await WhatsAppOutboxService.queueText(
         repo,
-        conv.customerPhone,
+        recipient,
         '⚠️ Invalid number of copies. Please reply with a number between 1 and 50.',
         conv.id,
         null
@@ -419,6 +476,7 @@ export class WhatsAppStateMachine {
 
     const sessionData: ConversationSessionData = {
       ...conv.sessionData,
+      whatsappChatId: conv.whatsappChatId || recipient,
       copies,
     };
 
@@ -428,7 +486,7 @@ export class WhatsAppStateMachine {
     if (totalPages === 1) {
       sessionData.pageSelection = 'all';
       sessionData.selectedPageCount = 1;
-      return this.generateAndSendQuote(conv, sessionData, repo);
+      return this.generateAndSendQuote(conv, sessionData, repo, event);
     }
 
     const updated = await repo.updateConversationState(
@@ -442,7 +500,7 @@ export class WhatsAppStateMachine {
 
     await WhatsAppOutboxService.queueButtons(
       repo,
-      conv.customerPhone,
+      recipient,
       `Copies set to *${copies}*.\n\nWhich pages would you like to print? (Document has ${totalPages} pages)\nReply with *"all"* or enter specific pages (e.g. "1-5, 8"):`,
       [{ id: 'btn_all_pages', title: 'All Pages' }],
       'PRINTOS Setup',
@@ -459,6 +517,7 @@ export class WhatsAppStateMachine {
     conv: WhatsAppConversation,
     repo: IPrintOSRepository
   ): Promise<WhatsAppConversation> {
+    const recipient = this.getReplyRecipient(conv, event);
     const raw = (event.buttonId || event.text || '').trim();
     const totalPages = conv.sessionData.pageCount || 1;
 
@@ -473,7 +532,7 @@ export class WhatsAppStateMachine {
       } catch (err: unknown) {
         await WhatsAppOutboxService.queueText(
           repo,
-          conv.customerPhone,
+          recipient,
           `⚠️ Invalid page range: ${err instanceof Error ? err.message : 'Invalid syntax'}. Reply with "all" or valid ranges like "1-3, 5".`,
           conv.id,
           null
@@ -484,18 +543,21 @@ export class WhatsAppStateMachine {
 
     const sessionData: ConversationSessionData = {
       ...conv.sessionData,
+      whatsappChatId: conv.whatsappChatId || recipient,
       pageSelection,
       selectedPageCount: selectedCount,
     };
 
-    return this.generateAndSendQuote(conv, sessionData, repo);
+    return this.generateAndSendQuote(conv, sessionData, repo, event);
   }
 
   private static async generateAndSendQuote(
     conv: WhatsAppConversation,
     sessionData: ConversationSessionData,
-    repo: IPrintOSRepository
+    repo: IPrintOSRepository,
+    event?: InboundWhatsAppEvent
   ): Promise<WhatsAppConversation> {
+    const recipient = this.getReplyRecipient(conv, event);
     const pricing = calculatePrintOrderPrice({
       paperSize: sessionData.paperSize || 'A4',
       colorMode: sessionData.colorMode || 'BW',
@@ -508,6 +570,7 @@ export class WhatsAppStateMachine {
     sessionData.subtotalPaisa = pricing.subtotalPaisa;
     sessionData.discountPaisa = pricing.discountPaisa;
     sessionData.totalAmountPaisa = pricing.totalAmountPaisa;
+    sessionData.whatsappChatId = conv.whatsappChatId || recipient;
 
     const updated = await repo.updateConversationState(
       conv.customerPhone,
@@ -530,7 +593,7 @@ export class WhatsAppStateMachine {
 
     await WhatsAppOutboxService.queueButtons(
       repo,
-      conv.customerPhone,
+      recipient,
       summary,
       [
         { id: 'btn_confirm', title: 'Confirm & Pay' },
@@ -550,10 +613,14 @@ export class WhatsAppStateMachine {
     conv: WhatsAppConversation,
     repo: IPrintOSRepository
   ): Promise<WhatsAppConversation> {
+    const recipient = this.getReplyRecipient(conv, event);
     const text = (event.buttonId || event.text || '').toLowerCase().trim();
 
     if (text === 'btn_confirm' || text.includes('confirm') || text.includes('pay') || text === 'yes' || text === '1') {
-      const s = conv.sessionData;
+      const s = {
+        ...conv.sessionData,
+        whatsappChatId: conv.whatsappChatId || recipient,
+      };
       const orderId = crypto.randomUUID();
       const orderNumber = `P${Math.floor(10000 + Math.random() * 90000)}`;
 
@@ -609,7 +676,7 @@ export class WhatsAppStateMachine {
 
       await WhatsAppOutboxService.queueText(
         repo,
-        conv.customerPhone,
+        recipient,
         `💳 *Payment Required: ₹${amountRupees}*\n\n` +
         `Order *#${orderNumber}* created.\n` +
         `Pay using UPI to immediately queue your print job:\n\n` +
@@ -625,7 +692,7 @@ export class WhatsAppStateMachine {
 
     await WhatsAppOutboxService.queueButtons(
       repo,
-      conv.customerPhone,
+      recipient,
       '⚠️ Please confirm your order to generate the payment link:',
       [
         { id: 'btn_confirm', title: 'Confirm & Pay' },
@@ -645,10 +712,11 @@ export class WhatsAppStateMachine {
     conv: WhatsAppConversation,
     repo: IPrintOSRepository
   ): Promise<WhatsAppConversation> {
+    const recipient = this.getReplyRecipient(conv, event);
     const amountRupees = (((conv.sessionData.totalAmountPaisa || 0) / 100)).toFixed(2);
     await WhatsAppOutboxService.queueText(
       repo,
-      conv.customerPhone,
+      recipient,
       `⏳ Your order is awaiting payment of *₹${amountRupees}*.\n\nPrinting will begin automatically as soon as payment is completed.`,
       conv.id,
       conv.activeOrderId
@@ -661,12 +729,13 @@ export class WhatsAppStateMachine {
     conv: WhatsAppConversation,
     repo: IPrintOSRepository
   ): Promise<WhatsAppConversation> {
+    const recipient = this.getReplyRecipient(conv, event);
     if (conv.activeOrderId) {
       const order = await repo.getOrder(conv.activeOrderId);
       if (order) {
         await WhatsAppOutboxService.queueText(
           repo,
-          conv.customerPhone,
+          recipient,
           `ℹ️ Your Order *#${order.orderNumber}* status is: *${order.status}*.\nWe will notify you the moment it is ready for collection!`,
           conv.id,
           conv.activeOrderId

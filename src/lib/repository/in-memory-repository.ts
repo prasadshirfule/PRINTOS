@@ -529,26 +529,48 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
   // --------------------------------------------------------------------------
   // Phase 2: WhatsApp Conversations & Locking
   // --------------------------------------------------------------------------
-  public async getConversation(customerPhone: string, shopId?: string): Promise<WhatsAppConversation | null> {
-    return this.conversations.get(this.conversationKey(customerPhone, shopId)) || null;
+  public async getConversation(identifier: string, shopId?: string): Promise<WhatsAppConversation | null> {
+    const rawDigits = identifier.includes('@') ? identifier.split('@')[0] : identifier;
+    const cUsCandidate = identifier.includes('@') ? identifier : `${identifier}@c.us`;
+
+    for (const conv of this.conversations.values()) {
+      if (shopId && conv.shopId && conv.shopId !== shopId) continue;
+      if (
+        conv.whatsappChatId === identifier ||
+        conv.customerPhone === identifier ||
+        conv.customerPhone === rawDigits ||
+        conv.whatsappChatId === cUsCandidate ||
+        conv.sessionData?.whatsappChatId === identifier
+      ) {
+        return conv;
+      }
+    }
+    return null;
   }
 
   public async upsertConversation(
-    conversation: Partial<WhatsAppConversation> & { customerPhone: string; shopId?: string | null }
+    conversation: Partial<WhatsAppConversation> & { customerPhone: string; whatsappChatId?: string | null; shopId?: string | null }
   ): Promise<WhatsAppConversation> {
     const tenantShopId = conversation.shopId || DEFAULT_SHOP_ID;
-    const key = this.conversationKey(conversation.customerPhone, tenantShopId);
-    const existing = this.conversations.get(key);
+    const identifier = conversation.whatsappChatId || conversation.customerPhone;
+    const existing = await this.getConversation(identifier, tenantShopId);
     const now = new Date().toISOString();
+    const resolvedChatId = conversation.whatsappChatId || existing?.whatsappChatId || (conversation.customerPhone.includes('@') ? conversation.customerPhone : null);
 
     if (existing) {
+      const key = this.conversationKey(existing.customerPhone, tenantShopId);
       const updated: WhatsAppConversation = {
         ...existing,
         shopId: tenantShopId,
+        whatsappChatId: resolvedChatId || existing.whatsappChatId || null,
         customerName: conversation.customerName !== undefined ? conversation.customerName : existing.customerName,
         currentState: conversation.currentState || existing.currentState,
         activeOrderId: conversation.activeOrderId !== undefined ? conversation.activeOrderId : existing.activeOrderId,
-        sessionData: conversation.sessionData ? { ...existing.sessionData, ...conversation.sessionData } : existing.sessionData,
+        sessionData: {
+          ...existing.sessionData,
+          ...(conversation.sessionData || {}),
+          ...(resolvedChatId ? { whatsappChatId: resolvedChatId } : {}),
+        },
         version: existing.version + 1,
         lastInteractionAt: now,
         updatedAt: now,
@@ -557,14 +579,19 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
       return updated;
     }
 
+    const key = this.conversationKey(conversation.customerPhone, tenantShopId);
     const created: WhatsAppConversation = {
       id: conversation.id || crypto.randomUUID(),
       shopId: tenantShopId,
       customerPhone: conversation.customerPhone,
+      whatsappChatId: resolvedChatId || null,
       customerName: conversation.customerName || null,
       currentState: conversation.currentState || 'IDLE',
       activeOrderId: conversation.activeOrderId || null,
-      sessionData: conversation.sessionData || {},
+      sessionData: {
+        ...(conversation.sessionData || {}),
+        ...(resolvedChatId ? { whatsappChatId: resolvedChatId } : {}),
+      },
       version: 1,
       lastInteractionAt: now,
       createdAt: now,
@@ -575,34 +602,42 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
   }
 
   public async updateConversationState(
-    customerPhone: string,
+    identifier: string,
     nextState: ConversationState,
     sessionData?: ConversationSessionData,
     activeOrderId?: string | null,
     expectedVersion?: number,
     shopId?: string
   ): Promise<WhatsAppConversation> {
-    const key = this.conversationKey(customerPhone, shopId);
-    const conversation = this.conversations.get(key);
-    if (!conversation) {
-      throw new ResourceNotFoundError('Conversation', customerPhone);
+    const existing = await this.getConversation(identifier, shopId);
+    if (!existing) {
+      throw new ResourceNotFoundError('Conversation', identifier);
     }
 
-    if (shopId && conversation.shopId && conversation.shopId !== shopId) {
-      throw new ResourceNotFoundError('Conversation for tenant shop', customerPhone);
+    if (shopId && existing.shopId && existing.shopId !== shopId) {
+      throw new ResourceNotFoundError('Conversation for tenant shop', identifier);
     }
 
-    if (expectedVersion !== undefined && conversation.version !== expectedVersion) {
-      throw new StaleConversationVersionError(customerPhone, expectedVersion);
+    if (expectedVersion !== undefined && existing.version !== expectedVersion) {
+      throw new StaleConversationVersionError(identifier, expectedVersion);
     }
 
     const now = new Date().toISOString();
+    const key = this.conversationKey(existing.customerPhone, existing.shopId || shopId);
+    const mergedSessionData: ConversationSessionData = {
+      ...existing.sessionData,
+      ...(sessionData !== undefined ? sessionData : {}),
+    };
+    if (existing.whatsappChatId && !mergedSessionData.whatsappChatId) {
+      mergedSessionData.whatsappChatId = existing.whatsappChatId;
+    }
+
     const updated: WhatsAppConversation = {
-      ...conversation,
+      ...existing,
       currentState: nextState,
-      sessionData: sessionData !== undefined ? sessionData : conversation.sessionData,
-      activeOrderId: activeOrderId !== undefined ? activeOrderId : conversation.activeOrderId,
-      version: conversation.version + 1,
+      sessionData: mergedSessionData,
+      activeOrderId: activeOrderId !== undefined ? activeOrderId : existing.activeOrderId,
+      version: existing.version + 1,
       lastInteractionAt: now,
       updatedAt: now,
     };

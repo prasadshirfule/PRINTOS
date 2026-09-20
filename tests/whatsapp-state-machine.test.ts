@@ -111,7 +111,8 @@ describe('Phase 2: WhatsApp State Machine', () => {
     const updatedConv = await WhatsAppStateMachine.processEvent(cancelEvent, repo);
 
     expect(updatedConv.currentState).toBe('CANCELLED');
-    expect(updatedConv.sessionData).toEqual({});
+    expect(updatedConv.sessionData.originalFilename).toBeUndefined();
+    expect(updatedConv.sessionData.documentPath).toBeUndefined();
   });
 
   it('rejects invalid page selection with helpful error and preserves state', async () => {
@@ -169,5 +170,101 @@ describe('Phase 2: WhatsApp State Machine', () => {
     const newEvent = makeEvent('text', 'hello again');
     const updated = await WhatsAppStateMachine.processEvent(newEvent, repo);
     expect(updated.currentState).toBe('AWAITING_DOCUMENT');
+  });
+
+  it('persists inbound WhatsApp LID ("20495684599884@lid") and routes replies to exact LID target', async () => {
+    const lidChatId = '20495684599884@lid';
+    const lidEvent: InboundWhatsAppEvent = {
+      wamid: 'wamid_lid_test_001',
+      from: lidChatId,
+      name: 'Privacy User',
+      timestamp: Date.now(),
+      type: 'text',
+      text: 'Hi',
+      rawPayload: {},
+    };
+
+    const conv = await WhatsAppStateMachine.processEvent(lidEvent, repo);
+    expect(conv.whatsappChatId).toBe(lidChatId);
+    expect(conv.sessionData.whatsappChatId).toBe(lidChatId);
+
+    // Retrieve conversation by either LID or customer phone
+    const fetchedByLid = await repo.getConversation(lidChatId);
+    expect(fetchedByLid).toBeDefined();
+    expect(fetchedByLid?.whatsappChatId).toBe(lidChatId);
+
+    // Verify outbox queued reply recipient is EXACTLY the LID
+    const outboxBatch = await repo.claimOutboxBatch('worker_reg_test', 10);
+    expect(outboxBatch.length).toBeGreaterThan(0);
+    expect(outboxBatch[0].recipientPhone).toBe(lidChatId);
+  });
+
+  it('preserves WhatsApp group identity ("120363000000000000@g.us") for replies', async () => {
+    const groupChatId = '120363000000000000@g.us';
+    const groupEvent: InboundWhatsAppEvent = {
+      wamid: 'wamid_group_test_001',
+      from: groupChatId,
+      name: 'Campus Print Group',
+      timestamp: Date.now(),
+      type: 'text',
+      text: 'Hi',
+      rawPayload: {},
+    };
+
+    const conv = await WhatsAppStateMachine.processEvent(groupEvent, repo);
+    expect(conv.whatsappChatId).toBe(groupChatId);
+
+    const outboxBatch = await repo.claimOutboxBatch('worker_group_test', 10);
+    expect(outboxBatch.length).toBeGreaterThan(0);
+    expect(outboxBatch[0].recipientPhone).toBe(groupChatId);
+  });
+
+  it('preserves standard phone JID ("919876543210@c.us") for replies', async () => {
+    const phoneChatId = '919876543210@c.us';
+    const cusEvent: InboundWhatsAppEvent = {
+      wamid: 'wamid_cus_test_001',
+      from: phoneChatId,
+      name: 'Standard User',
+      timestamp: Date.now(),
+      type: 'text',
+      text: 'Hi',
+      rawPayload: {},
+    };
+
+    const conv = await WhatsAppStateMachine.processEvent(cusEvent, repo);
+    expect(conv.whatsappChatId).toBe(phoneChatId);
+
+    const outboxBatch = await repo.claimOutboxBatch('worker_cus_test', 10);
+    expect(outboxBatch.length).toBeGreaterThan(0);
+    expect(outboxBatch[0].recipientPhone).toBe(phoneChatId);
+  });
+
+  it('ensures numeric customerPhone does NOT override whatsappChatId transport recipient', async () => {
+    // Existing conversation has numeric customerPhone "20495684599884" and whatsappChatId "20495684599884@lid"
+    await repo.upsertConversation({
+      customerPhone: '20495684599884',
+      whatsappChatId: '20495684599884@lid',
+      currentState: 'IDLE',
+      sessionData: { whatsappChatId: '20495684599884@lid' },
+    });
+
+    const event: InboundWhatsAppEvent = {
+      wamid: 'wamid_doc_lid_002',
+      from: '20495684599884@lid',
+      timestamp: Date.now(),
+      type: 'document',
+      filename: 'thesis.pdf',
+      mimeType: 'application/pdf',
+      rawPayload: { pageCount: 1, fileType: 'pdf' },
+    };
+
+    const updated = await WhatsAppStateMachine.processEvent(event, repo);
+    expect(updated.customerPhone).toBe('20495684599884');
+    expect(updated.whatsappChatId).toBe('20495684599884@lid');
+
+    const outboxBatch = await repo.claimOutboxBatch('worker_override_test', 10);
+    expect(outboxBatch.length).toBeGreaterThan(0);
+    // Transport recipient must be the LID, not the numeric phone
+    expect(outboxBatch[0].recipientPhone).toBe('20495684599884@lid');
   });
 });
