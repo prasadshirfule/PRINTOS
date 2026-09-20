@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { NextRequest } from 'next/server';
 import crypto from 'crypto';
 import { Readable } from 'stream';
 import { PDFDocument } from 'pdf-lib';
@@ -6,6 +7,8 @@ import { OpenWAWhatsAppProvider } from '@/lib/whatsapp/provider/openwa-whatsapp-
 import { getWhatsAppProvider, setWhatsAppProvider } from '@/lib/whatsapp/provider';
 import { WhatsAppInboxService } from '@/lib/whatsapp/inbox-service';
 import { WhatsAppMediaDownloader, MediaIngestionError } from '@/lib/whatsapp/media-downloader';
+import { POST as handleWhatsAppWebhook } from '@/app/api/webhooks/whatsapp/route';
+import { setRepository, InMemoryPrintOSRepository } from '@/lib/repository';
 
 describe('OpenWA WhatsApp Provider & Webhook Integration Suite', () => {
   const originalEnv = process.env;
@@ -14,11 +17,13 @@ describe('OpenWA WhatsApp Provider & Webhook Integration Suite', () => {
     vi.resetModules();
     process.env = { ...originalEnv };
     setWhatsAppProvider(null);
+    setRepository(null);
   });
 
   afterEach(() => {
     process.env = originalEnv;
     setWhatsAppProvider(null);
+    setRepository(null);
     vi.restoreAllMocks();
   });
 
@@ -44,11 +49,14 @@ describe('OpenWA WhatsApp Provider & Webhook Integration Suite', () => {
     expect(url).toBe('http://127.0.0.1:2785/api/sessions/session-printos/messages/send-text');
     expect(options.method).toBe('POST');
     expect(options.headers['X-API-Key']).toBe('test-api-key-secret');
+    expect(options.headers['Authorization']).toBe('Bearer test-api-key-secret');
+    expect(options.headers['ngrok-skip-browser-warning']).toBe('true');
     expect(options.headers['Content-Type']).toBe('application/json');
 
     const body = JSON.parse(options.body);
     expect(body.chatId).toBe('919876543210@c.us');
     expect(body.text).toBe('Hello from PRINTOS');
+    expect(body.session).toBe('session-printos');
     expect(result.providerMessageId).toBe('true_919876543210@c.us_3EB0123456');
   });
 
@@ -139,7 +147,7 @@ describe('OpenWA WhatsApp Provider & Webhook Integration Suite', () => {
     });
 
     await expect(provider.sendText('919876543210', 'Hi')).rejects.toThrow(
-      'OpenWA sendText error (409): {"message":"Session not ready"}'
+      /OpenWA sendText error \(409 Conflict\): \{"message":"Session not ready"\}/
     );
   });
 
@@ -383,21 +391,105 @@ describe('OpenWA WhatsApp Provider & Webhook Integration Suite', () => {
     expect(provider).toBeInstanceOf(OpenWAWhatsAppProvider);
   });
 
-  it('fails fast in production if WHATSAPP_PROVIDER=openwa is missing credentials', () => {
+  // 10. Webhook Route (/api/webhooks/whatsapp) OpenWA Tolerance & Signature Handling
+  it('accepts unsigned OpenWA webhook in production when OPENWA_WEBHOOK_SECRET is unset', async () => {
     (process.env as any).NODE_ENV = 'production';
     process.env.WHATSAPP_PROVIDER = 'openwa';
-    delete process.env.OPENWA_API_KEY;
-    delete process.env.OPENWA_BASE_URL;
+    delete process.env.OPENWA_WEBHOOK_SECRET;
 
-    expect(() => getWhatsAppProvider()).toThrow(/Production is configured for WHATSAPP_PROVIDER=openwa/);
+    const testRepo = new InMemoryPrintOSRepository();
+    setRepository(testRepo);
+
+    const payload = {
+      event: 'message',
+      data: {
+        id: 'false_919876543210@c.us_3EB0UNSIGN',
+        from: '919876543210@c.us',
+        body: 'Hi',
+        type: 'chat',
+      },
+    };
+
+    const req = new NextRequest('http://localhost:3000/api/webhooks/whatsapp', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+
+    const res = await handleWhatsAppWebhook(req);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.success).toBe(true);
+    expect(data.enqueued).toBe(1);
   });
 
-  it('fails fast in production if no valid provider is configured', () => {
+  it('verifies signed OpenWA webhook when signature header and secret are present', async () => {
     (process.env as any).NODE_ENV = 'production';
-    delete process.env.WHATSAPP_PROVIDER;
-    delete process.env.OPENWA_API_KEY;
-    delete process.env.WHATSAPP_PHONE_NUMBER_ID;
+    process.env.WHATSAPP_PROVIDER = 'openwa';
+    process.env.OPENWA_WEBHOOK_SECRET = 'whsec_test_secret_123';
 
-    expect(() => getWhatsAppProvider()).toThrow(/Production requires a valid WHATSAPP_PROVIDER/);
+    const testRepo = new InMemoryPrintOSRepository();
+    setRepository(testRepo);
+
+    const payload = {
+      event: 'message',
+      data: {
+        id: 'false_919876543210@c.us_3EB0SIGNED',
+        from: '919876543210@c.us',
+        body: 'Print order',
+        type: 'chat',
+      },
+    };
+
+    const rawBody = JSON.stringify(payload);
+    const signature = crypto.createHmac('sha256', 'whsec_test_secret_123').update(rawBody).digest('hex');
+
+    const req = new NextRequest('http://localhost:3000/api/webhooks/whatsapp', {
+      method: 'POST',
+      headers: {
+        'x-openwa-signature': `sha256=${signature}`,
+      },
+      body: rawBody,
+    });
+
+    const res = await handleWhatsAppWebhook(req);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.success).toBe(true);
+    expect(data.enqueued).toBe(1);
+  });
+
+  it('rejects signed OpenWA webhook with invalid signature header', async () => {
+    (process.env as any).NODE_ENV = 'production';
+    process.env.WHATSAPP_PROVIDER = 'openwa';
+    process.env.OPENWA_WEBHOOK_SECRET = 'whsec_test_secret_123';
+
+    const testRepo = new InMemoryPrintOSRepository();
+    setRepository(testRepo);
+
+    const payload = {
+      event: 'message',
+      data: {
+        id: 'false_919876543210@c.us_3EB0TAMPER',
+        from: '919876543210@c.us',
+        body: 'Tampered',
+        type: 'chat',
+      },
+    };
+
+    const rawBody = JSON.stringify(payload);
+    const badSignature = 'sha256=0000000000000000000000000000000000000000000000000000000000000000';
+
+    const req = new NextRequest('http://localhost:3000/api/webhooks/whatsapp', {
+      method: 'POST',
+      headers: {
+        'x-openwa-signature': badSignature,
+      },
+      body: rawBody,
+    });
+
+    const res = await handleWhatsAppWebhook(req);
+    expect(res.status).toBe(401);
+    const data = await res.json();
+    expect(data.error).toBe('Invalid OpenWA HMAC signature');
   });
 });

@@ -121,9 +121,8 @@ export class ProductionEnvValidator {
     }
     if (waProvider === 'openwa' || env.OPENWA_BASE_URL || env.OPENWA_API_URL) {
       if (!env.OPENWA_BASE_URL && !env.OPENWA_API_URL) missing.push('OPENWA_BASE_URL');
-      if (isProduction && !env.OPENWA_WEBHOOK_SECRET) {
-        missing.push('OPENWA_WEBHOOK_SECRET');
-        errors.push('OPENWA_WEBHOOK_SECRET is required to authenticate WhatsApp webhooks in production.');
+      if (!env.OPENWA_WEBHOOK_SECRET) {
+        warnings.push('OPENWA_WEBHOOK_SECRET is not configured; unsigned OpenWA webhooks will be accepted.');
       }
     }
     if (waProvider === 'meta' && isProduction && !env.WHATSAPP_APP_SECRET) {

@@ -13,7 +13,7 @@ export class OpenWAWhatsAppProvider implements IWhatsAppProvider {
   private sessionId: string;
 
   constructor(config?: OpenWAConfig) {
-    this.baseUrl = (config?.baseUrl || process.env.OPENWA_BASE_URL || 'http://127.0.0.1:2785').replace(/\/+$/, '');
+    this.baseUrl = (config?.baseUrl || process.env.OPENWA_BASE_URL || process.env.OPENWA_API_URL || 'http://127.0.0.1:2785').replace(/\/+$/, '');
     this.apiKey = config?.apiKey || process.env.OPENWA_API_KEY || '';
     this.sessionId = config?.sessionId || process.env.OPENWA_SESSION_ID || 'session-printos';
 
@@ -28,9 +28,13 @@ export class OpenWAWhatsAppProvider implements IWhatsAppProvider {
   private get authHeaders(): Record<string, string> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      'ngrok-skip-browser-warning': 'true',
+      'User-Agent': 'PRINTOS-Server/1.0',
     };
     if (this.apiKey) {
       headers['X-API-Key'] = this.apiKey;
+      headers['Authorization'] = `Bearer ${this.apiKey}`;
+      headers['api_key'] = this.apiKey;
     }
     return headers;
   }
@@ -54,13 +58,16 @@ export class OpenWAWhatsAppProvider implements IWhatsAppProvider {
         body: JSON.stringify({
           chatId,
           text: message,
+          session: this.sessionId,
+          sessionId: this.sessionId,
         }),
         signal: controller.signal,
       });
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => 'No error body');
-        throw new Error(`OpenWA sendText error (${response.status}): ${errorText}`);
+        const snippet = errorText.slice(0, 500);
+        throw new Error(`OpenWA sendText error (${response.status} ${response.statusText || ''}): ${snippet}`.trim());
       }
 
       const resData = (await response.json().catch(() => ({}))) as { id?: string; messageId?: string };
@@ -115,6 +122,8 @@ export class OpenWAWhatsAppProvider implements IWhatsAppProvider {
         ? 'image/png'
         : 'image/jpeg',
       caption: caption || '',
+      session: this.sessionId,
+      sessionId: this.sessionId,
     };
 
     if (isHttpUrl) {
@@ -136,7 +145,8 @@ export class OpenWAWhatsAppProvider implements IWhatsAppProvider {
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => 'No error body');
-        throw new Error(`OpenWA sendDocument error (${response.status}): ${errorText}`);
+        const snippet = errorText.slice(0, 500);
+        throw new Error(`OpenWA sendDocument error (${response.status} ${response.statusText || ''}): ${snippet}`.trim());
       }
 
       const resData = (await response.json().catch(() => ({}))) as { id?: string; messageId?: string };
@@ -189,7 +199,8 @@ export class OpenWAWhatsAppProvider implements IWhatsAppProvider {
 
       if (!response.ok || !response.body) {
         const errorText = await response.text().catch(() => 'No body');
-        throw new Error(`OpenWA downloadMedia error (${response.status}): ${errorText}`);
+        const snippet = errorText.slice(0, 500);
+        throw new Error(`OpenWA downloadMedia error (${response.status} ${response.statusText || ''}): ${snippet}`.trim());
       }
 
       const contentLengthHeader = response.headers.get('content-length');
