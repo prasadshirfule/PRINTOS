@@ -1,5 +1,8 @@
 import { Readable } from 'stream';
 import { IWhatsAppProvider, WhatsAppButton } from '@/types/whatsapp';
+import { createLogger } from '@/lib/observability/logger';
+
+const logger = createLogger('OpenWAProvider');
 
 export interface OpenWAConfig {
   baseUrl?: string;
@@ -46,8 +49,20 @@ export class OpenWAWhatsAppProvider implements IWhatsAppProvider {
   }
 
   public async sendText(to: string, message: string): Promise<{ providerMessageId: string }> {
-    const endpoint = `${this.baseUrl}/api/sessions/${encodeURIComponent(this.sessionId)}/messages/send-text`;
+    const path = `/api/sessions/${encodeURIComponent(this.sessionId)}/messages/send-text`;
+    const endpoint = `${this.baseUrl}${path}`;
     const chatId = this.formatChatId(to);
+
+    const headers = this.authHeaders;
+    logger.info('OpenWA authentication diagnostic', {
+      apiKeyConfigured: Boolean(this.apiKey),
+      apiKeyPrefix: this.apiKey ? this.apiKey.slice(0, 8) : null,
+      apiKeyLength: this.apiKey ? this.apiKey.length : 0,
+      baseUrl: this.baseUrl,
+      sessionId: this.sessionId,
+      path,
+      authHeaders: Object.keys(headers),
+    });
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
@@ -55,7 +70,7 @@ export class OpenWAWhatsAppProvider implements IWhatsAppProvider {
     try {
       const response = await fetch(endpoint, {
         method: 'POST',
-        headers: this.authHeaders,
+        headers,
         body: JSON.stringify({
           chatId,
           text: message,
@@ -105,7 +120,8 @@ export class OpenWAWhatsAppProvider implements IWhatsAppProvider {
     filename: string,
     caption?: string
   ): Promise<{ providerMessageId: string }> {
-    const endpoint = `${this.baseUrl}/api/sessions/${encodeURIComponent(this.sessionId)}/messages/send-document`;
+    const path = `/api/sessions/${encodeURIComponent(this.sessionId)}/messages/send-document`;
+    const endpoint = `${this.baseUrl}${path}`;
     const chatId = this.formatChatId(to);
 
     const isHttpUrl = documentUrl.startsWith('http://') || documentUrl.startsWith('https://');
@@ -129,13 +145,24 @@ export class OpenWAWhatsAppProvider implements IWhatsAppProvider {
       payload.base64 = base64Data;
     }
 
+    const headers = this.authHeaders;
+    logger.info('OpenWA authentication diagnostic', {
+      apiKeyConfigured: Boolean(this.apiKey),
+      apiKeyPrefix: this.apiKey ? this.apiKey.slice(0, 8) : null,
+      apiKeyLength: this.apiKey ? this.apiKey.length : 0,
+      baseUrl: this.baseUrl,
+      sessionId: this.sessionId,
+      path,
+      authHeaders: Object.keys(headers),
+    });
+
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 20000);
 
     try {
       const response = await fetch(endpoint, {
         method: 'POST',
-        headers: this.authHeaders,
+        headers,
         body: JSON.stringify(payload),
         signal: controller.signal,
       });
