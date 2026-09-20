@@ -267,4 +267,50 @@ describe('Phase 2: WhatsApp State Machine', () => {
     // Transport recipient must be the LID, not the numeric phone
     expect(outboxBatch[0].recipientPhone).toBe('20495684599884@lid');
   });
+
+  it('handles legacy customer_phone conversation lookup and attaches whatsappChatId', async () => {
+    // Legacy conversation created with plain customer_phone without whatsappChatId
+    const legacyConv = await repo.upsertConversation({
+      customerPhone: '919876543210',
+      currentState: 'IDLE',
+      sessionData: {},
+    });
+    expect(legacyConv.whatsappChatId).toBeNull();
+
+    // Querying with @c.us should match legacy conversation by phone digits and attach whatsappChatId
+    const foundByCus = await repo.getConversation('919876543210@c.us');
+    expect(foundByCus).toBeDefined();
+    expect(foundByCus?.id).toBe(legacyConv.id);
+    expect(foundByCus?.whatsappChatId).toBe('919876543210@c.us');
+  });
+
+  it('prevents collisions between LID and numeric phone numbers with same digits', async () => {
+    // Distinct conversation 1: numeric phone customer
+    const convPhone = await repo.upsertConversation({
+      customerPhone: '20495684599884',
+      whatsappChatId: '20495684599884@c.us',
+      currentState: 'IDLE',
+      sessionData: {},
+    });
+
+    // Distinct conversation 2: LID customer
+    const convLid = await repo.upsertConversation({
+      customerPhone: '20495684599884@lid',
+      whatsappChatId: '20495684599884@lid',
+      currentState: 'IDLE',
+      sessionData: {},
+    });
+
+    // Lookups must return the exact, distinct conversations without ambiguity
+    const retrievedLid = await repo.getConversation('20495684599884@lid');
+    expect(retrievedLid?.id).toBe(convLid.id);
+    expect(retrievedLid?.whatsappChatId).toBe('20495684599884@lid');
+
+    const retrievedPhone = await repo.getConversation('20495684599884@c.us');
+    expect(retrievedPhone?.id).toBe(convPhone.id);
+    expect(retrievedPhone?.whatsappChatId).toBe('20495684599884@c.us');
+
+    const retrievedByDigits = await repo.getConversation('20495684599884');
+    expect(retrievedByDigits?.id).toBe(convPhone.id);
+  });
 });

@@ -51,9 +51,12 @@ export class WhatsAppStateMachine {
     // 1. Fetch or initialize conversation
     let conv = await repo.getConversation(incomingChatId, shopId);
     if (!conv) {
-      const rawUser = incomingChatId.includes('@') ? incomingChatId.split('@')[0] : incomingChatId;
+      const customerPhone = incomingChatId.endsWith('@c.us')
+        ? incomingChatId.slice(0, -5)
+        : incomingChatId;
+
       conv = await repo.upsertConversation({
-        customerPhone: rawUser,
+        customerPhone,
         whatsappChatId: incomingChatId,
         shopId,
         customerName: event.name || null,

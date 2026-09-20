@@ -597,23 +597,104 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
   // Phase 2: WhatsApp Conversations & Locking
   // --------------------------------------------------------------------------
   public async getConversation(identifier: string, shopId?: string): Promise<WhatsAppConversation | null> {
-    const rawDigits = identifier.includes('@') ? identifier.split('@')[0] : identifier;
-    let query = this.supabase
+    const tenantShopId = shopId || DEFAULT_SHOP_ID;
+
+    // 1. Exact prioritized match on whatsapp_chat_id
+    if (identifier.includes('@')) {
+      let queryChatId = this.supabase
+        .from('whatsapp_conversations')
+        .select('*')
+        .eq('whatsapp_chat_id', identifier);
+
+      if (shopId) {
+        queryChatId = queryChatId.eq('shop_id', tenantShopId);
+      }
+
+      const { data, error } = await queryChatId.maybeSingle();
+      if (error) {
+        throw new Error(`Supabase getConversation by whatsapp_chat_id failed: ${error.message}`);
+      }
+      if (data) {
+        return this.mapConversation(data);
+      }
+    }
+
+    // 2. Exact match on customer_phone
+    let queryPhone = this.supabase
       .from('whatsapp_conversations')
       .select('*')
-      .or(`whatsapp_chat_id.eq.${identifier},customer_phone.eq.${identifier},customer_phone.eq.${rawDigits}`);
+      .eq('customer_phone', identifier);
 
     if (shopId) {
-      query = query.eq('shop_id', shopId);
+      queryPhone = queryPhone.eq('shop_id', tenantShopId);
     }
 
-    const { data, error } = await query.maybeSingle();
-
-    if (error) {
-      throw new Error(`Supabase getConversation failed: ${error.message}`);
+    const { data: phoneData, error: phoneErr } = await queryPhone.maybeSingle();
+    if (phoneErr) {
+      throw new Error(`Supabase getConversation by customer_phone failed: ${phoneErr.message}`);
+    }
+    if (phoneData) {
+      // If found and the identifier was an explicit WhatsApp JID, backfill whatsapp_chat_id if null
+      if (identifier.includes('@') && !phoneData.whatsapp_chat_id) {
+        await this.supabase
+          .from('whatsapp_conversations')
+          .update({ whatsapp_chat_id: identifier })
+          .eq('id', phoneData.id);
+        phoneData.whatsapp_chat_id = identifier;
+      }
+      return this.mapConversation(phoneData);
     }
 
-    return data ? this.mapConversation(data) : null;
+    // 3. Safe fallback ONLY for standard user @c.us domain (where user digits == phone number)
+    if (identifier.endsWith('@c.us')) {
+      const phoneDigits = identifier.slice(0, -5);
+      let queryCus = this.supabase
+        .from('whatsapp_conversations')
+        .select('*')
+        .eq('customer_phone', phoneDigits);
+
+      if (shopId) {
+        queryCus = queryCus.eq('shop_id', tenantShopId);
+      }
+
+      const { data: cusData, error: cusErr } = await queryCus.maybeSingle();
+      if (cusErr) {
+        throw new Error(`Supabase getConversation by @c.us digits failed: ${cusErr.message}`);
+      }
+      if (cusData) {
+        if (!cusData.whatsapp_chat_id) {
+          await this.supabase
+            .from('whatsapp_conversations')
+            .update({ whatsapp_chat_id: identifier })
+            .eq('id', cusData.id);
+          cusData.whatsapp_chat_id = identifier;
+        }
+        return this.mapConversation(cusData);
+      }
+    }
+
+    // 4. Safe fallback from plain numeric phone to @c.us chat ID
+    if (!identifier.includes('@')) {
+      const cusChatId = `${identifier}@c.us`;
+      let queryByCusChat = this.supabase
+        .from('whatsapp_conversations')
+        .select('*')
+        .eq('whatsapp_chat_id', cusChatId);
+
+      if (shopId) {
+        queryByCusChat = queryByCusChat.eq('shop_id', tenantShopId);
+      }
+
+      const { data: chatData, error: chatErr } = await queryByCusChat.maybeSingle();
+      if (chatErr) {
+        throw new Error(`Supabase getConversation by phone @c.us chat ID failed: ${chatErr.message}`);
+      }
+      if (chatData) {
+        return this.mapConversation(chatData);
+      }
+    }
+
+    return null;
   }
 
   public async upsertConversation(

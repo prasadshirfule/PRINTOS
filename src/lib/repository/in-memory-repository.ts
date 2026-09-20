@@ -530,21 +530,54 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
   // Phase 2: WhatsApp Conversations & Locking
   // --------------------------------------------------------------------------
   public async getConversation(identifier: string, shopId?: string): Promise<WhatsAppConversation | null> {
-    const rawDigits = identifier.includes('@') ? identifier.split('@')[0] : identifier;
-    const cUsCandidate = identifier.includes('@') ? identifier : `${identifier}@c.us`;
+    const tenantShopId = shopId || DEFAULT_SHOP_ID;
 
+    // 1. Exact prioritized match on whatsappChatId
+    if (identifier.includes('@')) {
+      for (const conv of this.conversations.values()) {
+        if (shopId && conv.shopId && conv.shopId !== tenantShopId) continue;
+        if (conv.whatsappChatId === identifier) {
+          return conv;
+        }
+      }
+    }
+
+    // 2. Exact match on customerPhone
     for (const conv of this.conversations.values()) {
-      if (shopId && conv.shopId && conv.shopId !== shopId) continue;
-      if (
-        conv.whatsappChatId === identifier ||
-        conv.customerPhone === identifier ||
-        conv.customerPhone === rawDigits ||
-        conv.whatsappChatId === cUsCandidate ||
-        conv.sessionData?.whatsappChatId === identifier
-      ) {
+      if (shopId && conv.shopId && conv.shopId !== tenantShopId) continue;
+      if (conv.customerPhone === identifier) {
+        if (identifier.includes('@') && !conv.whatsappChatId) {
+          conv.whatsappChatId = identifier;
+        }
         return conv;
       }
     }
+
+    // 3. Safe fallback ONLY for standard user @c.us domain
+    if (identifier.endsWith('@c.us')) {
+      const phoneDigits = identifier.slice(0, -5);
+      for (const conv of this.conversations.values()) {
+        if (shopId && conv.shopId && conv.shopId !== tenantShopId) continue;
+        if (conv.customerPhone === phoneDigits) {
+          if (!conv.whatsappChatId) {
+            conv.whatsappChatId = identifier;
+          }
+          return conv;
+        }
+      }
+    }
+
+    // 4. Safe fallback from plain numeric phone to @c.us chat ID
+    if (!identifier.includes('@')) {
+      const cusChatId = `${identifier}@c.us`;
+      for (const conv of this.conversations.values()) {
+        if (shopId && conv.shopId && conv.shopId !== tenantShopId) continue;
+        if (conv.whatsappChatId === cusChatId) {
+          return conv;
+        }
+      }
+    }
+
     return null;
   }
 
