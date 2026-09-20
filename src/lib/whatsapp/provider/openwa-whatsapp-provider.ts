@@ -35,10 +35,7 @@ export class OpenWAWhatsAppProvider implements IWhatsAppProvider {
       'User-Agent': 'PRINTOS-Server/1.0',
     };
     if (this.apiKey) {
-      headers['X-Api-Key'] = this.apiKey;
       headers['X-API-Key'] = this.apiKey;
-      headers['Authorization'] = `Bearer ${this.apiKey}`;
-      headers['api_key'] = this.apiKey;
     }
     return headers;
   }
@@ -63,6 +60,34 @@ export class OpenWAWhatsAppProvider implements IWhatsAppProvider {
       path,
       authHeaders: Object.keys(headers),
     });
+
+    // Temporary authentication validation diagnostic: POST /api/auth/validate
+    try {
+      const validationResponse = await fetch(`${this.baseUrl}/api/auth/validate`, {
+        method: 'POST',
+        headers: {
+          'X-API-Key': this.apiKey,
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': 'true',
+        },
+      });
+      const validationBody = await validationResponse.text().catch(() => 'No body');
+      logger.info('OpenWA API key validation diagnostic', {
+        status: validationResponse.status,
+        body: validationBody.slice(0, 500),
+        apiKeyConfigured: Boolean(this.apiKey),
+        apiKeyPrefix: this.apiKey ? this.apiKey.slice(0, 8) : null,
+        apiKeyLength: this.apiKey ? this.apiKey.length : 0,
+        baseUrl: this.baseUrl,
+        sessionId: this.sessionId,
+      });
+    } catch (valErr: unknown) {
+      logger.warn('OpenWA API key validation diagnostic request failed', {
+        errorMessage: valErr instanceof Error ? valErr.message : String(valErr),
+        apiKeyPrefix: this.apiKey ? this.apiKey.slice(0, 8) : null,
+        apiKeyLength: this.apiKey ? this.apiKey.length : 0,
+      });
+    }
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);

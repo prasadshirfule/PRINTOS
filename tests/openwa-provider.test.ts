@@ -29,10 +29,19 @@ describe('OpenWA WhatsApp Provider & Webhook Integration Suite', () => {
 
   // 1. OpenWA Provider Outbound Text
   it('sends text message with X-API-Key and correct chatId to OpenWA REST endpoint', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({ id: 'true_919876543210@c.us_3EB0123456', messageId: 'msg_001' }),
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/api/auth/validate')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ valid: true }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ id: 'true_919876543210@c.us_3EB0123456', messageId: 'msg_001' }),
+      };
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -44,12 +53,12 @@ describe('OpenWA WhatsApp Provider & Webhook Integration Suite', () => {
 
     const result = await provider.sendText('919876543210', 'Hello from PRINTOS');
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, options] = fetchMock.mock.calls[0];
+    const sendCall = fetchMock.mock.calls.find((c) => (c[0] as string).includes('messages/send-text'));
+    expect(sendCall).toBeDefined();
+    const [url, options] = sendCall!;
     expect(url).toBe('http://127.0.0.1:2785/api/sessions/session-printos/messages/send-text');
     expect(options.method).toBe('POST');
     expect(options.headers['X-API-Key']).toBe('test-api-key-secret');
-    expect(options.headers['Authorization']).toBe('Bearer test-api-key-secret');
     expect(options.headers['ngrok-skip-browser-warning']).toBe('true');
     expect(options.headers['Content-Type']).toBe('application/json');
 
@@ -62,10 +71,15 @@ describe('OpenWA WhatsApp Provider & Webhook Integration Suite', () => {
   });
 
   it('normalizes various phone number formats in formatChatId', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({ id: 'msg_100' }),
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/api/auth/validate')) {
+        return { ok: true, status: 200, text: async () => '{"valid":true}' };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ id: 'msg_100' }),
+      };
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -76,21 +90,27 @@ describe('OpenWA WhatsApp Provider & Webhook Integration Suite', () => {
     });
 
     await provider.sendText('+91 80807 50206', 'test 1');
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body).chatId).toBe('918080750206@c.us');
-
     await provider.sendText('918080750206@c.us', 'test 2');
-    expect(JSON.parse(fetchMock.mock.calls[1][1].body).chatId).toBe('918080750206@c.us');
-
     await provider.sendText('+91-8080-750206@s.whatsapp.net', 'test 3');
-    expect(JSON.parse(fetchMock.mock.calls[2][1].body).chatId).toBe('918080750206@c.us');
+
+    const sendCalls = fetchMock.mock.calls.filter((c) => (c[0] as string).includes('messages/send-text'));
+    expect(sendCalls).toHaveLength(3);
+    expect(JSON.parse(sendCalls[0][1].body).chatId).toBe('918080750206@c.us');
+    expect(JSON.parse(sendCalls[1][1].body).chatId).toBe('918080750206@c.us');
+    expect(JSON.parse(sendCalls[2][1].body).chatId).toBe('918080750206@c.us');
   });
 
   // 2. OpenWA Provider Numbered Fallback Menu
   it('formats interactive buttons into a structured numbered text prompt for WhatsApp Web', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({ id: 'msg_menu_123' }),
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/api/auth/validate')) {
+        return { ok: true, status: 200, text: async () => '{"valid":true}' };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ id: 'msg_menu_123' }),
+      };
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -111,8 +131,9 @@ describe('OpenWA WhatsApp Provider & Webhook Integration Suite', () => {
       'Step 1 of 4'
     );
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    const sendCall = fetchMock.mock.calls.find((c) => (c[0] as string).includes('messages/send-text'));
+    expect(sendCall).toBeDefined();
+    const body = JSON.parse(sendCall![1].body);
     expect(body.text).toContain('*PRINTOS Setup*');
     expect(body.text).toContain('Select print color mode:');
     expect(body.text).toContain('1️⃣ Black & White');
@@ -157,11 +178,16 @@ describe('OpenWA WhatsApp Provider & Webhook Integration Suite', () => {
 
   // 4. OpenWA Error & Timeout Handling
   it('handles OpenWA non-2xx HTTP responses with descriptive error', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 409,
-      statusText: 'Conflict',
-      text: async () => JSON.stringify({ message: 'Session not ready' }),
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/api/auth/validate')) {
+        return { ok: true, status: 200, text: async () => '{"valid":true}' };
+      }
+      return {
+        ok: false,
+        status: 409,
+        statusText: 'Conflict',
+        text: async () => JSON.stringify({ message: 'Session not ready' }),
+      };
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -177,7 +203,10 @@ describe('OpenWA WhatsApp Provider & Webhook Integration Suite', () => {
   });
 
   it('handles OpenWA network timeout cleanly', async () => {
-    const fetchMock = vi.fn().mockImplementation(() => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/api/auth/validate')) {
+        return { ok: true, status: 200, text: async () => '{"valid":true}' };
+      }
       const err = new Error('The operation was aborted');
       err.name = 'AbortError';
       return Promise.reject(err);
