@@ -3,6 +3,36 @@ import { IPrintOSRepository } from '@/lib/repository';
 
 export class WhatsAppInboxService {
   /**
+   * Normalize an inbound WhatsApp chat ID or sender while preserving explicit JID domains
+   * (@c.us, @lid, @g.us, etc.).
+   */
+  public static normalizeInboundChatId(rawId: string): string {
+    const trimmed = (rawId || '').trim();
+    if (!trimmed) {
+      return '';
+    }
+
+    // 1. If explicit WhatsApp JID domain is present
+    if (trimmed.includes('@')) {
+      const atIndex = trimmed.lastIndexOf('@');
+      const userPart = trimmed.slice(0, atIndex).replace(/^\+/, '');
+      const domainPart = trimmed.slice(atIndex + 1).toLowerCase();
+
+      // Normalize Meta Graph API / standard WA user domain to standard OpenWA user JID
+      if (domainPart === 's.whatsapp.net') {
+        const cleanedUser = userPart.replace(/\D/g, '');
+        return `${cleanedUser}@c.us`;
+      }
+
+      // Preserve @lid (Privacy / Linked Device ID), @g.us (Group), @c.us (User), etc.
+      return `${userPart}@${domainPart}`;
+    }
+
+    // 2. Pure digits or phone string without domain (e.g. from Meta Graph API)
+    return trimmed.replace(/\D/g, '');
+  }
+
+  /**
    * Parse a raw WhatsApp webhook payload (OpenWA, Meta Graph API, or Direct Test Simulation)
    * into a normalized InboundWhatsAppEvent.
    */
@@ -15,7 +45,7 @@ export class WhatsAppInboxService {
     if (typeof rawPayload.wamid === 'string' && typeof rawPayload.from === 'string') {
       return {
         wamid: rawPayload.wamid,
-        from: String(rawPayload.from).replace(/@c\.us$/, '').replace(/\D/g, ''),
+        from: this.normalizeInboundChatId(String(rawPayload.from)),
         name: typeof rawPayload.name === 'string' ? rawPayload.name : undefined,
         timestamp: typeof rawPayload.timestamp === 'number' ? rawPayload.timestamp : Date.now(),
         type: (rawPayload.type as InboundWhatsAppEvent['type']) || 'text',
@@ -118,7 +148,7 @@ export class WhatsAppInboxService {
     // Skip events that are not message receipts (e.g. status, session.qr) unless payload contains message data
     const data = (body.data as Record<string, unknown>) || body;
 
-    if (!data || typeof data !== 'object' || !data.id || !data.from) {
+    if (!data || typeof data !== 'object' || !data.id || (!data.from && !data.chatId && !(data.sender as any)?.id)) {
       return events;
     }
 
@@ -127,9 +157,9 @@ export class WhatsAppInboxService {
       return events;
     }
 
-    const rawFrom = String(data.from);
-    // Extract phone digits (e.g. "919876543210@c.us" -> "919876543210")
-    const from = rawFrom.replace(/@c\.us$/, '').replace(/@s\.whatsapp\.net$/, '').replace(/\D/g, '');
+    // In OpenWA, chatId / from preserves the original recipient target (@c.us, @lid, @g.us)
+    const rawTarget = String(data.chatId || data.from || (data.sender as any)?.id || '');
+    const from = this.normalizeInboundChatId(rawTarget);
     if (!from) {
       return events;
     }

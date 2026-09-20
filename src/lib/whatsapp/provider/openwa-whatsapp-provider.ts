@@ -41,8 +41,30 @@ export class OpenWAWhatsAppProvider implements IWhatsAppProvider {
   }
 
   private formatChatId(phone: string): string {
-    const cleaned = phone.replace(/@c\.us$/i, '').replace(/@s\.whatsapp\.net$/i, '').replace(/\D/g, '');
-    return `${cleaned}@c.us`;
+    const trimmed = (phone || '').trim();
+    if (!trimmed) {
+      return '';
+    }
+
+    // 1. If explicit WhatsApp JID domain is present (@c.us, @lid, @g.us, etc.)
+    if (trimmed.includes('@')) {
+      const atIndex = trimmed.lastIndexOf('@');
+      const userPart = trimmed.slice(0, atIndex).replace(/^\+/, '');
+      const domainPart = trimmed.slice(atIndex + 1).toLowerCase();
+
+      // Normalize standard Meta/WhatsApp user domain to OpenWA @c.us
+      if (domainPart === 's.whatsapp.net') {
+        const cleanedUser = userPart.replace(/\D/g, '');
+        return `${cleanedUser}@c.us`;
+      }
+
+      // Preserve @lid, @g.us, @c.us, and any other explicit OpenWA chat domain
+      return `${userPart}@${domainPart}`;
+    }
+
+    // 2. Pure phone digits without domain -> default to standard user domain @c.us
+    const digits = trimmed.replace(/\D/g, '');
+    return digits ? `${digits}@c.us` : trimmed;
   }
 
   public async sendText(to: string, message: string): Promise<{ providerMessageId: string }> {

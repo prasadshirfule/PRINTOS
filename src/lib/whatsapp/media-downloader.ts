@@ -144,7 +144,7 @@ export class WhatsAppMediaDownloader {
     const inspection: DocumentInspectionResult = await this.inspector.inspect(fullBuffer, filename);
 
     // 3. Store document into Private Storage
-    const phonePrefix = (customerPhone || 'unknown').replace(/\D/g, '');
+    const phonePrefix = (customerPhone || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
     const docUuid = crypto.randomUUID();
     const storagePath = `whatsapp/${phonePrefix}/${docUuid}_${filename}`;
 

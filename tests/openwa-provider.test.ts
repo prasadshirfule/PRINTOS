@@ -246,10 +246,83 @@ describe('OpenWA WhatsApp Provider & Webhook Integration Suite', () => {
     const parsed = WhatsAppInboxService.parseOpenWAWebhookPayload(openwaPayload);
     expect(parsed.length).toBe(1);
     expect(parsed[0].wamid).toBe('false_919876543210@c.us_3EB0A1B2C3D4');
-    expect(parsed[0].from).toBe('919876543210');
+    expect(parsed[0].from).toBe('919876543210@c.us');
     expect(parsed[0].name).toBe('Ramesh Kumar');
     expect(parsed[0].text).toBe('Hello Printos');
     expect(parsed[0].type).toBe('text');
+  });
+
+  it('preserves WhatsApp @lid privacy IDs and does not fabricate @c.us phone numbers', () => {
+    const lidPayload = {
+      event: 'message',
+      sessionId: 'session-printos',
+      data: {
+        id: 'false_20495684599884@lid_3EB0LID12345',
+        from: '20495684599884@lid',
+        chatId: '20495684599884@lid',
+        body: 'Hi from privacy mode',
+        type: 'chat',
+        pushName: 'Privacy User',
+      },
+    };
+
+    const parsed = WhatsAppInboxService.parseOpenWAWebhookPayload(lidPayload);
+    expect(parsed.length).toBe(1);
+    expect(parsed[0].from).toBe('20495684599884@lid');
+    expect(parsed[0].wamid).toBe('false_20495684599884@lid_3EB0LID12345');
+  });
+
+  it('preserves WhatsApp @g.us group IDs and custom OpenWA suffixes', () => {
+    const groupPayload = {
+      event: 'message',
+      sessionId: 'session-printos',
+      data: {
+        id: 'false_120363023456789012@g.us_3EB0GRP12345',
+        from: '120363023456789012@g.us',
+        chatId: '120363023456789012@g.us',
+        body: 'Group message',
+        type: 'chat',
+      },
+    };
+
+    const parsed = WhatsAppInboxService.parseOpenWAWebhookPayload(groupPayload);
+    expect(parsed.length).toBe(1);
+    expect(parsed[0].from).toBe('120363023456789012@g.us');
+  });
+
+  it('OpenWAProvider formatChatId preserves @lid, @g.us, @c.us and only converts raw phone numbers', async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/api/auth/validate')) {
+        return { ok: true, status: 200, text: async () => '{"valid":true}' };
+      }
+      return { ok: true, status: 200, json: async () => ({ id: 'msg_test' }) };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new OpenWAWhatsAppProvider({
+      baseUrl: 'http://127.0.0.1:2785',
+      apiKey: 'key',
+      sessionId: 'session-printos',
+    });
+
+    // 1. LID JID
+    await provider.sendText('20495684599884@lid', 'reply to lid');
+    // 2. Group JID
+    await provider.sendText('120363023456789012@g.us', 'reply to group');
+    // 3. User JID
+    await provider.sendText('919876543210@c.us', 'reply to user');
+    // 4. Meta user JID
+    await provider.sendText('919876543210@s.whatsapp.net', 'reply to meta user');
+    // 5. Raw phone string
+    await provider.sendText('+91 98765 43210', 'reply to raw phone');
+
+    const sendCalls = fetchMock.mock.calls.filter((c) => (c[0] as string).includes('messages/send-text'));
+    expect(sendCalls).toHaveLength(5);
+    expect(JSON.parse(sendCalls[0][1].body).chatId).toBe('20495684599884@lid');
+    expect(JSON.parse(sendCalls[1][1].body).chatId).toBe('120363023456789012@g.us');
+    expect(JSON.parse(sendCalls[2][1].body).chatId).toBe('919876543210@c.us');
+    expect(JSON.parse(sendCalls[3][1].body).chatId).toBe('919876543210@c.us');
+    expect(JSON.parse(sendCalls[4][1].body).chatId).toBe('919876543210@c.us');
   });
 
   it('parses OpenWA document message payload with media metadata', () => {
@@ -545,5 +618,73 @@ describe('OpenWA WhatsApp Provider & Webhook Integration Suite', () => {
     expect(res.status).toBe(401);
     const data = await res.json();
     expect(data.error).toBe('Invalid OpenWA HMAC signature');
+  });
+
+  // 11. End-to-End LID Inbound Event -> State Machine -> Outbox Preservation
+  it('preserves inbound LID chatId through state machine and outbox transmission', async () => {
+    const testRepo = new InMemoryPrintOSRepository();
+    setRepository(testRepo);
+
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/api/auth/validate')) {
+        return { ok: true, status: 200, text: async () => '{"valid":true}' };
+      }
+      return { ok: true, status: 200, json: async () => ({ id: 'outbox_msg_lid_999' }) };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new OpenWAWhatsAppProvider({
+      baseUrl: 'http://127.0.0.1:2785',
+      apiKey: 'test-key',
+      sessionId: 'session-printos',
+    });
+    setWhatsAppProvider(provider);
+
+    // Inbound message from WhatsApp privacy LID user
+    const lidInboundEvent = {
+      wamid: 'false_20495684599884@lid_3EB0HI',
+      from: '20495684599884@lid',
+      name: 'LID Customer',
+      timestamp: Date.now(),
+      type: 'text' as const,
+      text: 'Hi',
+      rawPayload: {},
+    };
+
+    // 1. Process through state machine
+    const { WhatsAppStateMachine } = await import('@/lib/whatsapp/state-machine');
+    await WhatsAppStateMachine.processEvent(lidInboundEvent, testRepo);
+
+    // 2. Verify conversation was created with customerPhone = '20495684599884@lid'
+    const conv = await testRepo.getConversation('20495684599884@lid');
+    expect(conv).toBeDefined();
+    expect(conv?.customerPhone).toBe('20495684599884@lid');
+
+    // 3. Verify outbox queue contains item with recipientPhone = '20495684599884@lid'
+    const outboxItems = await testRepo.claimOutboxBatch('test_worker', 10);
+    expect(outboxItems.length).toBeGreaterThanOrEqual(1);
+    expect(outboxItems[0].recipientPhone).toBe('20495684599884@lid');
+
+    // 4. Transmit via Worker Engine
+    const { WhatsAppWorkerEngine } = await import('@/lib/whatsapp/worker-engine');
+    const worker = new WhatsAppWorkerEngine(testRepo);
+    // Complete the claimed item by running worker cycle
+    await testRepo.completeOutboxItem(outboxItems[0].id, 'test_worker');
+    
+    // Re-queue and transmit directly
+    const directOutbox = await testRepo.enqueueOutboxItem({
+      recipientPhone: '20495684599884@lid',
+      messageType: 'text',
+      payload: { body: 'Direct reply test' },
+    });
+    const batch = await testRepo.claimOutboxBatch('worker_lid', 1);
+    expect(batch[0].recipientPhone).toBe('20495684599884@lid');
+
+    // Transmit to OpenWA
+    await provider.sendText(batch[0].recipientPhone, 'Hello back!');
+    const sendCalls = fetchMock.mock.calls.filter((c) => (c[0] as string).includes('messages/send-text'));
+    const lastSendCall = sendCalls[sendCalls.length - 1];
+    expect(lastSendCall).toBeDefined();
+    expect(JSON.parse(lastSendCall[1].body).chatId).toBe('20495684599884@lid');
   });
 });
