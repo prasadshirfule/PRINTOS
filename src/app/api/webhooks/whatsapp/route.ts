@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
 import crypto from 'crypto';
 import { getRepository } from '@/lib/repository';
 import { WhatsAppInboxService } from '@/lib/whatsapp/inbox-service';
@@ -169,11 +169,20 @@ export async function POST(req: NextRequest) {
     if (process.env.DISABLE_EAGER_WORKER !== 'true') {
       try {
         const worker = new WhatsAppWorkerEngine(repo);
-        worker.runCycle().catch((e) => {
-          logger.warn('Background worker cycle failed, deferring to cron', { error: e });
+
+        after(async () => {
+          try {
+            await worker.runCycle();
+          } catch (e) {
+            logger.warn('Background worker cycle failed, deferring to cron', {
+              error: e,
+            });
+          }
         });
       } catch (workerErr) {
-        logger.warn('Failed to start eager worker cycle, deferring to cron', { error: workerErr });
+        logger.warn('Failed to schedule eager worker cycle, deferring to cron', {
+          error: workerErr,
+        });
       }
     }
 
