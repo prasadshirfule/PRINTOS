@@ -32,6 +32,7 @@ export class OpenWAWhatsAppProvider implements IWhatsAppProvider {
       'User-Agent': 'PRINTOS-Server/1.0',
     };
     if (this.apiKey) {
+      headers['X-Api-Key'] = this.apiKey;
       headers['X-API-Key'] = this.apiKey;
       headers['Authorization'] = `Bearer ${this.apiKey}`;
       headers['api_key'] = this.apiKey;
@@ -40,7 +41,7 @@ export class OpenWAWhatsAppProvider implements IWhatsAppProvider {
   }
 
   private formatChatId(phone: string): string {
-    const cleaned = phone.replace(/@c\.us$/, '').replace(/\D/g, '');
+    const cleaned = phone.replace(/@c\.us$/i, '').replace(/@s\.whatsapp\.net$/i, '').replace(/\D/g, '');
     return `${cleaned}@c.us`;
   }
 
@@ -58,8 +59,6 @@ export class OpenWAWhatsAppProvider implements IWhatsAppProvider {
         body: JSON.stringify({
           chatId,
           text: message,
-          session: this.sessionId,
-          sessionId: this.sessionId,
         }),
         signal: controller.signal,
       });
@@ -122,8 +121,6 @@ export class OpenWAWhatsAppProvider implements IWhatsAppProvider {
         ? 'image/png'
         : 'image/jpeg',
       caption: caption || '',
-      session: this.sessionId,
-      sessionId: this.sessionId,
     };
 
     if (isHttpUrl) {

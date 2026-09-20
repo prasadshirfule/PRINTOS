@@ -54,10 +54,35 @@ describe('OpenWA WhatsApp Provider & Webhook Integration Suite', () => {
     expect(options.headers['Content-Type']).toBe('application/json');
 
     const body = JSON.parse(options.body);
-    expect(body.chatId).toBe('919876543210@c.us');
-    expect(body.text).toBe('Hello from PRINTOS');
-    expect(body.session).toBe('session-printos');
+    expect(body).toEqual({
+      chatId: '919876543210@c.us',
+      text: 'Hello from PRINTOS',
+    });
     expect(result.providerMessageId).toBe('true_919876543210@c.us_3EB0123456');
+  });
+
+  it('normalizes various phone number formats in formatChatId', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ id: 'msg_100' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new OpenWAWhatsAppProvider({
+      baseUrl: 'http://127.0.0.1:2785',
+      apiKey: 'k',
+      sessionId: 'session-printos',
+    });
+
+    await provider.sendText('+91 80807 50206', 'test 1');
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).chatId).toBe('918080750206@c.us');
+
+    await provider.sendText('918080750206@c.us', 'test 2');
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).chatId).toBe('918080750206@c.us');
+
+    await provider.sendText('+91-8080-750206@s.whatsapp.net', 'test 3');
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body).chatId).toBe('918080750206@c.us');
   });
 
   // 2. OpenWA Provider Numbered Fallback Menu
