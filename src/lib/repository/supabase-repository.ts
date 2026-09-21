@@ -970,6 +970,18 @@ export class SupabasePrintOSRepository implements IPrintOSRepository {
     payload: WhatsAppOutboxPayload;
     shopId?: string;
   }): Promise<WhatsAppOutboxItem> {
+    if (item.payload?.idempotencyKey) {
+      const { data: existing } = await this.supabase
+        .from('whatsapp_outbox')
+        .select('*')
+        .eq('payload->>idempotencyKey', item.payload.idempotencyKey)
+        .maybeSingle();
+
+      if (existing) {
+        return this.mapOutboxItem(existing);
+      }
+    }
+
     let shopId = item.shopId;
     if (!shopId && item.conversationId) {
       const { data: conversation } = await this.supabase

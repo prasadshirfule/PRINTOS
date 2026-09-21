@@ -12,14 +12,15 @@ export class WhatsAppOutboxService {
     recipientPhone: string,
     body: string,
     conversationId?: string | null,
-    orderId?: string | null
+    orderId?: string | null,
+    idempotencyKey?: string
   ): Promise<WhatsAppOutboxItem> {
     return repo.enqueueOutboxItem({
       conversationId,
       orderId,
       recipientPhone,
       messageType: 'text',
-      payload: { body },
+      payload: { body, idempotencyKey },
     });
   }
 
@@ -31,7 +32,8 @@ export class WhatsAppOutboxService {
     headerText?: string,
     footerText?: string,
     conversationId?: string | null,
-    orderId?: string | null
+    orderId?: string | null,
+    idempotencyKey?: string
   ): Promise<WhatsAppOutboxItem> {
     return repo.enqueueOutboxItem({
       conversationId,
@@ -43,6 +45,7 @@ export class WhatsAppOutboxService {
         buttons,
         headerText,
         footerText,
+        idempotencyKey,
       },
     });
   }
@@ -54,7 +57,8 @@ export class WhatsAppOutboxService {
     filename: string,
     caption?: string,
     conversationId?: string | null,
-    orderId?: string | null
+    orderId?: string | null,
+    idempotencyKey?: string
   ): Promise<WhatsAppOutboxItem> {
     return repo.enqueueOutboxItem({
       conversationId,
@@ -65,6 +69,7 @@ export class WhatsAppOutboxService {
         mediaUrl,
         filename,
         caption,
+        idempotencyKey,
       },
     });
   }
@@ -75,7 +80,8 @@ export class WhatsAppOutboxService {
     orderNumber: string,
     status: OrderStatus,
     conversationId?: string | null,
-    orderId?: string | null
+    orderId?: string | null,
+    idempotencyKey?: string
   ): Promise<WhatsAppOutboxItem> {
     let body = '';
     switch (status) {
@@ -95,12 +101,14 @@ export class WhatsAppOutboxService {
         body = `ℹ️ Order *#${orderNumber}* status updated to *${status}*.`;
     }
 
+    const key = idempotencyKey || (orderId ? `${orderId}:${status}` : undefined);
+
     return repo.enqueueOutboxItem({
       conversationId,
       orderId,
       recipientPhone,
       messageType: 'text',
-      payload: { body },
+      payload: { body, idempotencyKey: key },
     });
   }
 }

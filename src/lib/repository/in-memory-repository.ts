@@ -817,6 +817,15 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
     payload: WhatsAppOutboxPayload;
     shopId?: string;
   }): Promise<WhatsAppOutboxItem> {
+    if (item.payload?.idempotencyKey) {
+      const existing = Array.from(this.outbox.values()).find(
+        (out) => out.payload?.idempotencyKey === item.payload.idempotencyKey
+      );
+      if (existing) {
+        return existing;
+      }
+    }
+
     const now = new Date().toISOString();
     const linkedConversation = item.conversationId
       ? Array.from(this.conversations.values()).find((conversation) => conversation.id === item.conversationId)

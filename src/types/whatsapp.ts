@@ -112,6 +112,7 @@ export interface WhatsAppOutboxPayload {
   templateName?: string;
   templateLanguage?: string;
   templateComponents?: unknown[];
+  idempotencyKey?: string;
 }
 
 export interface WhatsAppOutboxItem {

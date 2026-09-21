@@ -77,7 +77,8 @@ export class NotificationService {
       order.orderNumber,
       newStatus,
       conv?.id,
-      order.id
+      order.id,
+      `${order.id}:${newStatus}`
     );
 
     // Sync conversation state if conversation exists
