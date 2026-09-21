@@ -296,12 +296,15 @@ export class WhatsAppStateMachine {
     // Default page count: 1 for images, 12 for simulated test documents, or from payload
     const pageCount = (event.rawPayload?.pageCount as number) || (ext === 'pdf' ? 12 : 1);
     const orderId = crypto.randomUUID();
-    const storagePath = `orders/${orderId}/${filename}`;
+    const storagePath =
+      (typeof event.rawPayload?.storagePath === 'string' && event.rawPayload.storagePath.trim()) ||
+      (typeof (event as any).storagePath === 'string' && (event as any).storagePath.trim()) ||
+      `orders/${orderId}/${filename}`;
 
     const sessionData: ConversationSessionData = {
       whatsappChatId: conv.whatsappChatId || recipient,
       originalFilename: filename,
-      fileType: ext as any,
+      fileType: (event.rawPayload?.fileType as any) || (ext as any),
       fileSize: event.fileSize || 4096,
       pageCount,
       documentPath: storagePath,

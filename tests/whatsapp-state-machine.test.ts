@@ -98,6 +98,85 @@ describe('Phase 2: WhatsApp State Machine', () => {
     expect(order!.customerPhone).toBe(phone);
     expect(order!.copies).toBe(2);
     expect(order!.pageCount).toBe(5);
+    expect(order!.storagePath).toBe(`whatsapp/${phone}/doc_123_lecture_notes.pdf`);
+  });
+
+  it('preserves exact actual Supabase Storage object path for uploaded WhatsApp documents when creating order', async () => {
+    const customChatId = '20495684599884@lid';
+    const uploadedPath = 'whatsapp/20495684599884_lid/48d78d3c-9fba-48b4-9e57-afa8205f5026_document_1789933112894.jpg';
+
+    // 1. Direct document upload event with actual storage path
+    const docEvent: InboundWhatsAppEvent = {
+      wamid: 'wamid_doc_storage_test',
+      from: customChatId,
+      timestamp: Date.now(),
+      type: 'image',
+      filename: 'document_1789933112894.jpg',
+      fileSize: 135812,
+      rawPayload: {
+        storagePath: uploadedPath,
+        pageCount: 1,
+        fileType: 'jpg',
+      },
+    };
+
+    const conv = await WhatsAppStateMachine.processEvent(docEvent, repo);
+    expect(conv.currentState).toBe('COLLECTING_COLOR');
+    expect(conv.sessionData.documentPath).toBe(uploadedPath);
+
+    // 2. Select options through to order confirmation
+    await WhatsAppStateMachine.processEvent(makeEvent('button', 'Black & White', 'btn_bw', { from: customChatId }), repo);
+    await WhatsAppStateMachine.processEvent(makeEvent('button', 'Single-Sided', 'btn_single', { from: customChatId }), repo);
+    await WhatsAppStateMachine.processEvent(makeEvent('text', '1', undefined, { from: customChatId }), repo);
+    await WhatsAppStateMachine.processEvent(makeEvent('button', 'All Pages', 'btn_all_pages', { from: customChatId }), repo);
+
+    const confirmRes = await WhatsAppStateMachine.processEvent(
+      makeEvent('button', 'Confirm & Pay', 'btn_confirm_order', { from: customChatId }),
+      repo
+    );
+
+    expect(confirmRes.currentState).toBe('AWAITING_PAYMENT');
+    expect(confirmRes.activeOrderId).toBeDefined();
+
+    const createdOrder = await repo.getOrder(confirmRes.activeOrderId!);
+    expect(createdOrder).toBeDefined();
+    expect(createdOrder!.storagePath).toBe(uploadedPath);
+    expect(createdOrder!.originalFilename).toBe('document_1789933112894.jpg');
+    expect(createdOrder!.fileType).toBe('jpg');
+  });
+
+  it('falls back to generated storage path when storagePath is absent in uploaded document payload', async () => {
+    const docEvent: InboundWhatsAppEvent = {
+      wamid: 'wamid_doc_fallback_test',
+      from: phone,
+      timestamp: Date.now(),
+      type: 'document',
+      filename: 'fallback_doc.pdf',
+      fileSize: 2048,
+      rawPayload: {
+        pageCount: 1,
+      },
+    };
+
+    const conv = await WhatsAppStateMachine.processEvent(docEvent, repo);
+    expect(conv.currentState).toBe('COLLECTING_COLOR');
+    expect(conv.sessionData.documentPath).toMatch(/^orders\/[0-9a-f-]+\/fallback_doc\.pdf$/);
+
+    await WhatsAppStateMachine.processEvent(makeEvent('button', 'Black & White', 'btn_bw'), repo);
+    await WhatsAppStateMachine.processEvent(makeEvent('button', 'Single-Sided', 'btn_single'), repo);
+    await WhatsAppStateMachine.processEvent(makeEvent('text', '1'), repo);
+
+    const confirmRes = await WhatsAppStateMachine.processEvent(
+      makeEvent('button', 'Confirm & Pay', 'btn_confirm_order'),
+      repo
+    );
+
+    expect(confirmRes.currentState).toBe('AWAITING_PAYMENT');
+    const order = await repo.getOrder(confirmRes.activeOrderId!);
+    expect(order).toBeDefined();
+    expect(order!.storagePath).toMatch(/^orders\/[0-9a-f-]+\/fallback_doc\.pdf$/);
+    expect(order!.originalFilename).toBe('fallback_doc.pdf');
+    expect(order!.fileType).toBe('pdf');
   });
 
   it('handles cancellation and resets conversation to IDLE', async () => {
