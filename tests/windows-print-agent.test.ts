@@ -67,6 +67,47 @@ describe('Windows Print Agent & Spooler Subsystem', () => {
     });
   });
 
+  describe('Native PowerShell Spooler Script Builder & Fallback Invocation', () => {
+    it('safely encodes printer names with spaces, parentheses, and hyphens into PowerShell script', () => {
+      const printerName = 'HP PageWide MFP P57750 PCL-6 (Network)';
+      const filePath = 'C:\\temp\\document_1789933112894.jpg';
+      const script = WindowsPrintSpooler.buildPowerShellScript(filePath, printerName, 2);
+
+      expect(script).toContain('FromBase64String');
+      expect(script).toContain('Start-Process');
+      expect(script).toContain('PrintTo');
+      expect(script).not.toContain(printerName); // Must be encoded in base64, not raw interpolated
+      
+      const b64Printer = Buffer.from(printerName, 'utf8').toString('base64');
+      const b64File = Buffer.from(filePath, 'utf8').toString('base64');
+      expect(script).toContain(b64Printer);
+      expect(script).toContain(b64File);
+    });
+
+    it('executes PowerShell fallback cleanly and fails on missing file rather than syntax error', async () => {
+      const printerName = 'HP PageWide MFP P57750 PCL-6 (Network)';
+      const missingFile = 'C:\\temp\\non_existent_test_document_printos_123.jpg';
+      const job: ClaimedJob = {
+        jobId: 'job_fallback_test',
+        orderId: 'ord_fb_1',
+        orderNumber: 'P9001',
+        storagePath: 'orders/test.jpg',
+        originalFilename: 'test.jpg',
+        printOptions: {},
+        colorMode: 'BW',
+        paperSize: 'A4',
+        printSides: 'ONE_SIDED',
+        copies: 1,
+      };
+
+      // When sumatraPath is null, it uses PowerShell fallback
+      // Since missingFile does not exist, it should cleanly throw "Document file not found" error, NOT a PowerShell parsing error
+      await expect(
+        WindowsPrintSpooler.printDocument(missingFile, printerName, job, null)
+      ).rejects.toThrow(/Document file not found/i);
+    });
+  });
+
   describe('WindowsPrintAgent Instance & Config', () => {
     it('initializes agent with configured parameters and creates temp spool directory', async () => {
       const agent = new WindowsPrintAgent({

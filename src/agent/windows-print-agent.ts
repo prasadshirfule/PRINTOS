@@ -1,11 +1,12 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { exec, execSync } from 'child_process';
+import { exec, execFile, execSync } from 'child_process';
 import { promisify } from 'util';
 import { ClaimedJob, PrinterStatus } from '../types/printos';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export interface DiscoveredPrinter {
   name: string;
@@ -49,11 +50,19 @@ export class WindowsPrinterDiscovery {
     }
 
     try {
-      const psCommand = `
+      const psScript = `
         Get-CimInstance -ClassName Win32_Printer | Select-Object Name, Default, PortName, DriverName, PrinterStatus, CapabilityDescriptions, Capabilities | ConvertTo-Json -Compress
       `.trim();
 
-      const { stdout } = await execAsync(`powershell.exe -NoProfile -Command "${psCommand}"`);
+      const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
+      const { stdout } = await execFileAsync('powershell.exe', [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-EncodedCommand',
+        encoded,
+      ]);
       if (!stdout || !stdout.trim()) {
         return [];
       }
@@ -179,6 +188,37 @@ export class WindowsPrintSpooler {
   }
 
   /**
+   * Builds safe PowerShell script using base64 encoded parameters to prevent syntax/quoting injection
+   */
+  public static buildPowerShellScript(filePath: string, printerName: string, copies = 1): string {
+    const b64Printer = Buffer.from(printerName, 'utf8').toString('base64');
+    const b64File = Buffer.from(filePath, 'utf8').toString('base64');
+    const copyCount = Math.max(1, copies);
+
+    return `
+$ErrorActionPreference = 'Stop'
+$printerName = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${b64Printer}'))
+$filePath = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${b64File}'))
+
+if (-not (Test-Path -LiteralPath $filePath)) {
+  throw "Document file not found at path: $filePath"
+}
+
+Write-Output "Spooling document '$filePath' to printer '$printerName' (copies: ${copyCount})"
+
+for ($i = 0; $i -lt ${copyCount}; $i++) {
+  $proc = Start-Process -FilePath $filePath -Verb PrintTo -ArgumentList ('"{0}"' -f $printerName) -PassThru
+  if ($proc) {
+    $finished = $proc.WaitForExit(30000)
+    if ($proc.HasExited -and $proc.ExitCode -ne 0) {
+      throw "Print process failed with exit code: $($proc.ExitCode)"
+    }
+  }
+}
+`.trim();
+  }
+
+  /**
    * Spools document to Windows Print Subsystem via SumatraPDF or PowerShell
    */
   public static async printDocument(
@@ -189,21 +229,39 @@ export class WindowsPrintSpooler {
   ): Promise<void> {
     if (sumatraPath) {
       const printSettings = this.buildSumatraPrintSettings(job);
-      const command = `"${sumatraPath}" -print-to "${printerName}" -print-settings "${printSettings}" -silent "${filePath}"`;
+      const args = [
+        '-print-to',
+        printerName,
+        '-print-settings',
+        printSettings,
+        '-silent',
+        filePath,
+      ];
 
-      console.log(`[WindowsPrintSpooler] Executing SumatraPDF: ${command}`);
-      const { stderr } = await execAsync(command, { timeout: 30000 });
+      console.log(`[WindowsPrintSpooler] Executing SumatraPDF: "${sumatraPath}" ${args.join(' ')}`);
+      const { stderr } = await execFileAsync(sumatraPath, args, { timeout: 30000 });
       if (stderr && !stderr.toLowerCase().includes('warning')) {
         throw new Error(`SumatraPDF print warning/error: ${stderr}`);
       }
     } else {
-      // Fallback to Native PowerShell Spooler
+      // Fallback to Native PowerShell Spooler with safe base64 encoding
       console.log(`[WindowsPrintSpooler] SumatraPDF not found. Falling back to PowerShell Spooler for "${printerName}"`);
-      const psScript = `
-        Start-Process -FilePath "${filePath}" -Verb PrintTo -ArgumentList "${printerName}" -PassThru | Wait-Process -Timeout 30
-      `.trim();
+      const copies = Math.max(1, job.copies || 1);
+      const psScript = this.buildPowerShellScript(filePath, printerName, copies);
+      const encodedCommand = Buffer.from(psScript, 'utf16le').toString('base64');
 
-      await execAsync(`powershell.exe -NoProfile -Command "${psScript}"`, { timeout: 35000 });
+      await execFileAsync(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-EncodedCommand',
+          encodedCommand,
+        ],
+        { timeout: 35000 * copies }
+      );
     }
   }
 }
