@@ -3,7 +3,11 @@ import path from 'path';
 import os from 'os';
 import { exec, execFile, execSync } from 'child_process';
 import { promisify } from 'util';
+import dotenv from 'dotenv';
 import { ClaimedJob, PrinterStatus } from '../types/printos';
+
+dotenv.config({ path: '.env.local' });
+dotenv.config();
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -219,7 +223,82 @@ for ($i = 0; $i -lt ${copyCount}; $i++) {
   }
 
   /**
-   * Spools document to Windows Print Subsystem via SumatraPDF or PowerShell
+   * Builds safe PowerShell script using .NET System.Drawing.Printing.PrintDocument
+   * to spool images (.jpg, .jpeg, .png, .bmp) directly to the Windows printer
+   */
+  public static buildPowerShellImageScript(
+    filePath: string,
+    printerName: string,
+    job: ClaimedJob
+  ): string {
+    const b64Printer = Buffer.from(printerName, 'utf8').toString('base64');
+    const b64File = Buffer.from(filePath, 'utf8').toString('base64');
+    const copies = Math.max(1, job.copies || 1);
+    const colorMode = job.colorMode || 'BW';
+    const printSides = job.printSides || 'ONE_SIDED';
+
+    return `
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Drawing
+
+$printerName = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${b64Printer}'))
+$filePath = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${b64File}'))
+
+if (-not (Test-Path -LiteralPath $filePath)) {
+  throw "Document file not found at path: $filePath"
+}
+
+$image = [System.Drawing.Image]::FromFile($filePath)
+$doc = New-Object System.Drawing.Printing.PrintDocument
+
+try {
+  $doc.PrinterSettings.PrinterName = $printerName
+  if (-not $doc.PrinterSettings.IsValid) {
+    throw "Target printer '$printerName' is not a valid installed Windows printer."
+  }
+
+  $doc.PrinterSettings.Copies = ${copies}
+  if ($doc.PrinterSettings.SupportsColor) {
+    $doc.DefaultPageSettings.Color = ('${colorMode}' -eq 'COLOR')
+  }
+
+  if ($doc.PrinterSettings.CanDuplex) {
+    if ('${printSides}' -eq 'BOTH_SIDES') {
+      $doc.PrinterSettings.Duplex = [System.Drawing.Printing.Duplex]::Vertical
+    } else {
+      $doc.PrinterSettings.Duplex = [System.Drawing.Printing.Duplex]::Simplex
+    }
+  }
+
+  $doc.DocumentName = [System.IO.Path]::GetFileName($filePath)
+
+  $doc.add_PrintPage({
+    param($sender, $e)
+    
+    $rect = $e.MarginBounds
+    $scale = [Math]::Min($rect.Width / $image.Width, $rect.Height / $image.Height)
+    $w = [int]($image.Width * $scale)
+    $h = [int]($image.Height * $scale)
+    $x = $rect.X + [int](($rect.Width - $w) / 2)
+    $y = $rect.Y + [int](($rect.Height - $h) / 2)
+
+    $e.Graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $e.Graphics.DrawImage($image, $x, $y, $w, $h)
+    $e.HasMorePages = $false
+  })
+
+  Write-Output "Spooling image '$filePath' to printer '$printerName' via System.Drawing (copies: ${copies}, mode: ${colorMode})"
+  $doc.Print()
+  Write-Output "Image spooled successfully to '$printerName'."
+} finally {
+  $doc.Dispose()
+  $image.Dispose()
+}
+`.trim();
+  }
+
+  /**
+   * Spools document to Windows Print Subsystem via SumatraPDF, System.Drawing, or PowerShell
    */
   public static async printDocument(
     filePath: string,
@@ -227,6 +306,35 @@ for ($i = 0; $i -lt ${copyCount}; $i++) {
     job: ClaimedJob,
     sumatraPath: string | null
   ): Promise<void> {
+    const ext = (
+      path.extname(filePath) ||
+      (job.originalFilename ? path.extname(job.originalFilename) : '') ||
+      ''
+    ).toLowerCase().replace('.', '');
+
+    const isImage = ['jpg', 'jpeg', 'png', 'bmp'].includes(ext);
+
+    if (isImage) {
+      // Native Windows GDI Image Spooler via System.Drawing
+      console.log(`[WindowsPrintSpooler] Spooling image (${ext}) via .NET System.Drawing directly to "${printerName}"`);
+      const psScript = this.buildPowerShellImageScript(filePath, printerName, job);
+      const encodedCommand = Buffer.from(psScript, 'utf16le').toString('base64');
+
+      await execFileAsync(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-EncodedCommand',
+          encodedCommand,
+        ],
+        { timeout: 35000 * Math.max(1, job.copies || 1) }
+      );
+      return;
+    }
+
     if (sumatraPath) {
       const printSettings = this.buildSumatraPrintSettings(job);
       const args = [
@@ -244,8 +352,8 @@ for ($i = 0; $i -lt ${copyCount}; $i++) {
         throw new Error(`SumatraPDF print warning/error: ${stderr}`);
       }
     } else {
-      // Fallback to Native PowerShell Spooler with safe base64 encoding
-      console.log(`[WindowsPrintSpooler] SumatraPDF not found. Falling back to PowerShell Spooler for "${printerName}"`);
+      // Fallback to Native PowerShell PDF Spooler with safe base64 encoding
+      console.log(`[WindowsPrintSpooler] SumatraPDF not found. Falling back to PowerShell PDF Spooler for "${printerName}"`);
       const copies = Math.max(1, job.copies || 1);
       const psScript = this.buildPowerShellScript(filePath, printerName, copies);
       const encodedCommand = Buffer.from(psScript, 'utf16le').toString('base64');

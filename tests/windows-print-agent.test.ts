@@ -68,9 +68,9 @@ describe('Windows Print Agent & Spooler Subsystem', () => {
   });
 
   describe('Native PowerShell Spooler Script Builder & Fallback Invocation', () => {
-    it('safely encodes printer names with spaces, parentheses, and hyphens into PowerShell script', () => {
+    it('safely encodes printer names with spaces, parentheses, and hyphens into PDF fallback script', () => {
       const printerName = 'HP PageWide MFP P57750 PCL-6 (Network)';
-      const filePath = 'C:\\temp\\document_1789933112894.jpg';
+      const filePath = 'C:\\temp\\document_1789933112894.pdf';
       const script = WindowsPrintSpooler.buildPowerShellScript(filePath, printerName, 2);
 
       expect(script).toContain('FromBase64String');
@@ -84,15 +84,68 @@ describe('Windows Print Agent & Spooler Subsystem', () => {
       expect(script).toContain(b64File);
     });
 
-    it('executes PowerShell fallback cleanly and fails on missing file rather than syntax error', async () => {
+    it('builds safe System.Drawing script for images with proportional scaling, copies, and duplex settings', () => {
       const printerName = 'HP PageWide MFP P57750 PCL-6 (Network)';
-      const missingFile = 'C:\\temp\\non_existent_test_document_printos_123.jpg';
+      const filePath = 'C:\\temp\\photo (1).jpg';
+      const job: ClaimedJob = {
+        jobId: 'job_img_1',
+        orderId: 'ord_img_1',
+        orderNumber: 'P9002',
+        storagePath: 'orders/photo.jpg',
+        originalFilename: 'photo (1).jpg',
+        printOptions: {},
+        colorMode: 'COLOR',
+        paperSize: 'A4',
+        printSides: 'BOTH_SIDES',
+        copies: 3,
+      };
+
+      const script = WindowsPrintSpooler.buildPowerShellImageScript(filePath, printerName, job);
+
+      expect(script).toContain('System.Drawing');
+      expect(script).toContain('PrintDocument');
+      expect(script).toContain('PrintPage');
+      expect(script).toContain('InterpolationMode');
+      expect(script).toContain('Copies = 3');
+      expect(script).not.toContain(printerName); // Safely encoded in base64
+      expect(script).not.toContain('Start-Process'); // Must NOT use Start-Process for images
+
+      const b64Printer = Buffer.from(printerName, 'utf8').toString('base64');
+      const b64File = Buffer.from(filePath, 'utf8').toString('base64');
+      expect(script).toContain(b64Printer);
+      expect(script).toContain(b64File);
+    });
+
+    it('routes JPG/JPEG/PNG/BMP files to System.Drawing and fails on missing file rather than syntax error', async () => {
+      const printerName = 'HP PageWide MFP P57750 PCL-6 (Network)';
+      const missingFile = 'C:\\temp\\non_existent_image_123.jpg';
+      const job: ClaimedJob = {
+        jobId: 'job_img_route',
+        orderId: 'ord_img_2',
+        orderNumber: 'P97754',
+        storagePath: 'orders/doc.jpg',
+        originalFilename: 'document_1789933112894.jpg',
+        printOptions: {},
+        colorMode: 'BW',
+        paperSize: 'A4',
+        printSides: 'ONE_SIDED',
+        copies: 1,
+      };
+
+      await expect(
+        WindowsPrintSpooler.printDocument(missingFile, printerName, job, null)
+      ).rejects.toThrow(/Document file not found/i);
+    });
+
+    it('executes PDF fallback cleanly and fails on missing file rather than syntax error', async () => {
+      const printerName = 'HP PageWide MFP P57750 PCL-6 (Network)';
+      const missingFile = 'C:\\temp\\non_existent_test_document_printos_123.pdf';
       const job: ClaimedJob = {
         jobId: 'job_fallback_test',
         orderId: 'ord_fb_1',
         orderNumber: 'P9001',
-        storagePath: 'orders/test.jpg',
-        originalFilename: 'test.jpg',
+        storagePath: 'orders/test.pdf',
+        originalFilename: 'test.pdf',
         printOptions: {},
         colorMode: 'BW',
         paperSize: 'A4',
