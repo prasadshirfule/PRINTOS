@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import crypto from 'crypto';
 import { getRepository } from '@/lib/repository';
 import { PrintOrder } from '@/types/printos';
-import { NotificationService } from '@/lib/whatsapp/notification-service';
+import { NotificationService, sanitizeCustomerFailureReason } from '@/lib/whatsapp/notification-service';
 import { POST as handleStatusUpdate } from '@/app/api/agent/jobs/[id]/status/route';
 import { NextRequest } from 'next/server';
 
@@ -67,6 +67,7 @@ describe('WhatsApp Print Status Notification Idempotency Suite', () => {
     );
 
     expect(printingNotifications.length).toBe(1);
+    expect(printingNotifications[0].payload.body).toContain('Printing started');
   });
 
   it('2. Same job fails multiple times/retries: suppresses intermediate failure alerts and sends only one final failure notification', async () => {
@@ -118,7 +119,7 @@ describe('WhatsApp Print Status Notification Idempotency Suite', () => {
 
     // Attempt 3: Claim -> FAILED (reaches maxAttempts 3 -> terminal FAILED)
     await repo.claimNextPrintJob(agentId);
-    const resFail3 = await handleStatusUpdate(createStatusRequest({ status: 'FAILED', errorMessage: 'Final hardware fault' }), { params: { id: job.id } });
+    const resFail3 = await handleStatusUpdate(createStatusRequest({ status: 'FAILED', errorMessage: 'Start-Process : This command cannot be run due to the error: No application is associated with the specified file for this operation.' }), { params: { id: job.id } });
     expect(resFail3.status).toBe(200);
 
     currentJob = await repo.getJob(job.id);
@@ -126,7 +127,15 @@ describe('WhatsApp Print Status Notification Idempotency Suite', () => {
 
     outboxItems = getOutboxForOrder(order.id);
     expect(outboxItems.filter((i) => i.payload.idempotencyKey === `${order.id}:PRINTING`).length).toBe(1);
-    expect(outboxItems.filter((i) => i.payload.idempotencyKey === `${order.id}:FAILED`).length).toBe(1);
+    const failureNotifications = outboxItems.filter((i) => i.payload.idempotencyKey === `${order.id}:FAILED`);
+    expect(failureNotifications.length).toBe(1);
+
+    // Verify safe reason in customer message
+    const failBody = failureNotifications[0].payload.body;
+    expect(failBody).toContain('Printing failed for Order *#P10002*');
+    expect(failBody).toContain('Reason: PDF printing engine is unavailable.');
+    expect(failBody).toContain('Please check with the counter staff for assistance.');
+    expect(failBody).not.toContain('Start-Process'); // Technical PowerShell details stripped
 
     // Simulating another duplicate failure call does not generate a 2nd failure notification
     const orderObj = await repo.getOrder(order.id);
@@ -210,5 +219,31 @@ describe('WhatsApp Print Status Notification Idempotency Suite', () => {
 
     expect(printingNotifications.length).toBe(1);
     expect(completedNotifications.length).toBe(1);
+  });
+
+  it('6. Maps various technical errors to clean human-readable failure reasons without exposing internals', () => {
+    expect(sanitizeCustomerFailureReason('SumatraPDF not found on host')).toBe('PDF printing engine is unavailable');
+    expect(sanitizeCustomerFailureReason('No application is associated with the specified file for this operation')).toBe('PDF printing engine is unavailable');
+    expect(sanitizeCustomerFailureReason('Target printer is offline or not found')).toBe('Printer unavailable');
+    expect(sanitizeCustomerFailureReason('Failed to download document from storage 404')).toBe('Document download failed');
+    expect(sanitizeCustomerFailureReason('Printer paper jam in tray 1')).toBe('Printer paper jam or hardware issue');
+    expect(sanitizeCustomerFailureReason('PowerShell spooler process exited with code 1')).toBe('Printer spooler error');
+    expect(sanitizeCustomerFailureReason('Unexpected unhandled error XYZ')).toBe('Unknown printing error');
+  });
+
+  it('7. Formats failure notification with Order #P86927 matching desired styling', async () => {
+    const order = await createTestOrder('ord-p86927-format', 'P86927');
+    await NotificationService.notifyOrderStatus(
+      repo,
+      order,
+      'FAILED',
+      'PDF printing engine unavailable: SumatraPDF is not installed or found on host system'
+    );
+
+    const outbox = getOutboxForOrder(order.id);
+    expect(outbox.length).toBe(1);
+    expect(outbox[0].payload.body).toBe(
+      '⚠️ Printing failed for Order *#P86927*.\n\nReason: PDF printing engine is unavailable.\n\nPlease check with the counter staff for assistance.'
+    );
   });
 });

@@ -3,6 +3,54 @@ import { PrintOrder, OrderStatus } from '@/types/printos';
 import { WhatsAppOutboxService } from './outbox-service';
 import { ConversationState } from '@/types/whatsapp';
 
+export function sanitizeCustomerFailureReason(errorMessage?: string): string {
+  if (!errorMessage) {
+    return 'Printer hardware or spooler issue';
+  }
+  const msg = errorMessage.toLowerCase();
+
+  if (
+    msg.includes('sumatrapdf') ||
+    msg.includes('pdf printing engine') ||
+    msg.includes('no application is associated')
+  ) {
+    return 'PDF printing engine is unavailable';
+  }
+  if (
+    msg.includes('printer') &&
+    (msg.includes('not found') ||
+      msg.includes('not valid') ||
+      msg.includes('unavailable') ||
+      msg.includes('offline'))
+  ) {
+    return 'Printer unavailable';
+  }
+  if (
+    msg.includes('download') ||
+    msg.includes('fetch') ||
+    msg.includes('storage') ||
+    msg.includes('document file not found')
+  ) {
+    return 'Document download failed';
+  }
+  if (
+    msg.includes('jam') ||
+    msg.includes('door') ||
+    msg.includes('tray') ||
+    msg.includes('out of paper')
+  ) {
+    return 'Printer paper jam or hardware issue';
+  }
+  if (
+    msg.includes('spooler') ||
+    msg.includes('drawing') ||
+    msg.includes('powershell')
+  ) {
+    return 'Printer spooler error';
+  }
+  return 'Unknown printing error';
+}
+
 export class NotificationService {
   /**
    * Dispatches a durable transactional outbox notification and syncs conversation state
@@ -20,10 +68,7 @@ export class NotificationService {
 
     switch (newStatus) {
       case 'PRINTING':
-        messageText =
-          `🖨️ *Printing Started!*\n\n` +
-          `Your order *#${order.orderNumber}* is currently being printed on the shop printer.\n` +
-          `We will notify you the moment it finishes!`;
+        messageText = `🖨️ Printing started! Your Order *#${order.orderNumber}* is currently being printed at the counter.`;
         targetState = 'ORDER_PRINTING';
         break;
 
@@ -39,13 +84,15 @@ export class NotificationService {
         targetState = 'ORDER_COMPLETED';
         break;
 
-      case 'FAILED':
+      case 'FAILED': {
+        const safeReason = sanitizeCustomerFailureReason(reason);
         messageText =
-          `⚠️ *Print Job Alert*\n\n` +
-          `There was an issue printing your order *#${order.orderNumber}* (${reason || 'Hardware error'}).\n` +
-          `The shop operator has been alerted and will assist you at the counter.`;
+          `⚠️ Printing failed for Order *#${order.orderNumber}*.\n\n` +
+          `Reason: ${safeReason}.\n\n` +
+          `Please check with the counter staff for assistance.`;
         targetState = 'ORDER_FAILED';
         break;
+      }
 
       case 'CANCELLED':
         messageText =
@@ -78,7 +125,9 @@ export class NotificationService {
       newStatus,
       conv?.id,
       order.id,
-      `${order.id}:${newStatus}`
+      `${order.id}:${newStatus}`,
+      messageText,
+      reason
     );
 
     // Sync conversation state if conversation exists

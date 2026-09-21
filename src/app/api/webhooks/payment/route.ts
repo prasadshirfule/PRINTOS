@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { waitUntil } from '@vercel/functions';
 import { getRepository } from '@/lib/repository';
 import { getPaymentProvider, FulfillabilityPolicy } from '@/lib/payment';
 import { WhatsAppOutboxService } from '@/lib/whatsapp/outbox-service';
+import { WhatsAppWorkerEngine } from '@/lib/whatsapp/worker-engine';
 import { globalRateLimiter } from '@/lib/security/rate-limiter';
 import { createLogger } from '@/lib/observability/logger';
 
@@ -153,6 +155,23 @@ export async function POST(req: NextRequest) {
           conv.id,
           updatedOrder.id
         );
+      }
+
+      if (process.env.DISABLE_EAGER_WORKER !== 'true') {
+        try {
+          const worker = new WhatsAppWorkerEngine(repo);
+          waitUntil(
+            worker.runCycle().catch((e) => {
+              logger.warn('Background worker cycle failed, deferring to cron', {
+                errorMessage: e instanceof Error ? e.message : String(e),
+              });
+            })
+          );
+        } catch (workerErr) {
+          logger.warn('Failed to start eager worker cycle, deferring to cron', {
+            errorMessage: workerErr instanceof Error ? workerErr.message : String(workerErr),
+          });
+        }
       }
 
       return NextResponse.json({

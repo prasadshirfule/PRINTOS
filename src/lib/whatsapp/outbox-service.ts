@@ -81,24 +81,29 @@ export class WhatsAppOutboxService {
     status: OrderStatus,
     conversationId?: string | null,
     orderId?: string | null,
-    idempotencyKey?: string
+    idempotencyKey?: string,
+    customBody?: string,
+    reason?: string
   ): Promise<WhatsAppOutboxItem> {
-    let body = '';
-    switch (status) {
-      case 'QUEUED':
-        body = `✅ Payment verified! Your Order *#${orderNumber}* has been queued for printing. We will notify you once printing begins.`;
-        break;
-      case 'PRINTING':
-        body = `🖨️ Printing started! Your Order *#${orderNumber}* is currently being printed at the counter.`;
-        break;
-      case 'COMPLETED':
-        body = `🎉 Order *#${orderNumber}* is READY! You can collect your printed documents from the counter. Thank you for using PRINTOS!`;
-        break;
-      case 'FAILED':
-        body = `⚠️ An issue occurred with Order *#${orderNumber}*. Please check with the counter staff for immediate assistance.`;
-        break;
-      default:
-        body = `ℹ️ Order *#${orderNumber}* status updated to *${status}*.`;
+    let body = customBody || '';
+    if (!body) {
+      switch (status) {
+        case 'QUEUED':
+          body = `✅ Payment verified! Your Order *#${orderNumber}* has been queued for printing. We will notify you once printing begins.`;
+          break;
+        case 'PRINTING':
+          body = `🖨️ Printing started! Your Order *#${orderNumber}* is currently being printed at the counter.`;
+          break;
+        case 'COMPLETED':
+          body = `🎉 Order *#${orderNumber}* is READY! You can collect your printed documents from the counter. Thank you for using PRINTOS!`;
+          break;
+        case 'FAILED': {
+          body = `⚠️ Printing failed for Order *#${orderNumber}*.\n\nReason: ${reason || 'Hardware or spooler issue'}.\n\nPlease check with the counter staff for assistance.`;
+          break;
+        }
+        default:
+          body = `ℹ️ Order *#${orderNumber}* status updated to *${status}*.`;
+      }
     }
 
     const key = idempotencyKey || (orderId ? `${orderId}:${status}` : undefined);

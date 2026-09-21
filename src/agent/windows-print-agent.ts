@@ -133,6 +133,12 @@ export class WindowsPrinterDiscovery {
       'C:\\Program Files\\SumatraPDF\\SumatraPDF.exe',
       'C:\\Program Files (x86)\\SumatraPDF\\SumatraPDF.exe',
       path.join(os.homedir(), 'AppData\\Local\\SumatraPDF\\SumatraPDF.exe'),
+      path.join(os.homedir(), 'AppData\\Roaming\\SumatraPDF\\SumatraPDF.exe'),
+      path.join(process.env.ProgramData || 'C:\\ProgramData', 'chocolatey\\bin\\SumatraPDF.exe'),
+      path.join(os.homedir(), 'scoop\\shims\\SumatraPDF.exe'),
+      path.join(process.cwd(), 'bin\\SumatraPDF.exe'),
+      path.join(process.cwd(), 'tools\\SumatraPDF.exe'),
+      path.join(process.cwd(), 'SumatraPDF.exe'),
     ].filter(Boolean) as string[];
 
     for (const p of candidatePaths) {
@@ -352,24 +358,8 @@ try {
         throw new Error(`SumatraPDF print warning/error: ${stderr}`);
       }
     } else {
-      // Fallback to Native PowerShell PDF Spooler with safe base64 encoding
-      console.log(`[WindowsPrintSpooler] SumatraPDF not found. Falling back to PowerShell PDF Spooler for "${printerName}"`);
-      const copies = Math.max(1, job.copies || 1);
-      const psScript = this.buildPowerShellScript(filePath, printerName, copies);
-      const encodedCommand = Buffer.from(psScript, 'utf16le').toString('base64');
-
-      await execFileAsync(
-        'powershell.exe',
-        [
-          '-NoProfile',
-          '-NonInteractive',
-          '-ExecutionPolicy',
-          'Bypass',
-          '-EncodedCommand',
-          encodedCommand,
-        ],
-        { timeout: 35000 * copies }
-      );
+      console.error(`[WindowsPrintSpooler] SumatraPDF not found. Windows has no default PDF PrintTo association.`);
+      throw new Error('PDF printing engine unavailable: SumatraPDF is not installed or found on host system. Please install SumatraPDF (https://www.sumatrapdfreader.org/) or configure SUMATRA_PDF_PATH.');
     }
   }
 }

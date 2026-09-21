@@ -45,6 +45,24 @@ describe('Windows Print Agent & Spooler Subsystem', () => {
       const settings = WindowsPrintSpooler.buildSumatraPrintSettings(job);
       expect(settings).toBe('duplex,color,1-5, 8,copies=3,paper=A4');
     });
+
+    it('preserves 2 copies, BW, and BOTH_SIDES for P86927 document settings', () => {
+      const job: ClaimedJob = {
+        jobId: '4ab37b93-9692-4ee6-b98a-ae84aecd2f86',
+        orderId: 'ord_p86927',
+        orderNumber: 'P86927',
+        storagePath: 'orders/AI_Unit-VI.pdf',
+        originalFilename: 'AI_Unit-VI.pdf',
+        printOptions: {},
+        colorMode: 'BW',
+        paperSize: 'A4',
+        printSides: 'BOTH_SIDES',
+        copies: 2,
+      };
+
+      const settings = WindowsPrintSpooler.buildSumatraPrintSettings(job);
+      expect(settings).toBe('duplex,monochrome,copies=2,paper=A4');
+    });
   });
 
   describe('Windows Printer Hardware Discovery', () => {
@@ -62,13 +80,13 @@ describe('Windows Print Agent & Spooler Subsystem', () => {
 
     it('safely handles custom path resolution for SumatraPDF', () => {
       const found = WindowsPrinterDiscovery.findSumatraPDF('C:\\NonExistentPath\\SumatraPDF.exe');
-      // If custom path doesn't exist, it checks system locations or returns null
+      // If custom path doesn't exist, it checks candidate locations or returns null
       expect(found === null || typeof found === 'string').toBe(true);
     });
   });
 
   describe('Native PowerShell Spooler Script Builder & Fallback Invocation', () => {
-    it('safely encodes printer names with spaces, parentheses, and hyphens into PDF fallback script', () => {
+    it('safely encodes printer names with spaces, parentheses, and hyphens into script builder', () => {
       const printerName = 'HP PageWide MFP P57750 PCL-6 (Network)';
       const filePath = 'C:\\temp\\document_1789933112894.pdf';
       const script = WindowsPrintSpooler.buildPowerShellScript(filePath, printerName, 2);
@@ -137,27 +155,26 @@ describe('Windows Print Agent & Spooler Subsystem', () => {
       ).rejects.toThrow(/Document file not found/i);
     });
 
-    it('executes PDF fallback cleanly and fails on missing file rather than syntax error', async () => {
+    it('fails fast on PDF when SumatraPDF is not installed, without silently attempting broken PrintTo', async () => {
       const printerName = 'HP PageWide MFP P57750 PCL-6 (Network)';
-      const missingFile = 'C:\\temp\\non_existent_test_document_printos_123.pdf';
+      const pdfFile = 'C:\\temp\\AI_Unit-VI.pdf';
       const job: ClaimedJob = {
-        jobId: 'job_fallback_test',
-        orderId: 'ord_fb_1',
-        orderNumber: 'P9001',
-        storagePath: 'orders/test.pdf',
-        originalFilename: 'test.pdf',
+        jobId: 'job_pdf_sumatra_missing',
+        orderId: 'ord_p86927',
+        orderNumber: 'P86927',
+        storagePath: 'orders/AI_Unit-VI.pdf',
+        originalFilename: 'AI_Unit-VI.pdf',
         printOptions: {},
         colorMode: 'BW',
         paperSize: 'A4',
-        printSides: 'ONE_SIDED',
-        copies: 1,
+        printSides: 'BOTH_SIDES',
+        copies: 2,
       };
 
-      // When sumatraPath is null, it uses PowerShell fallback
-      // Since missingFile does not exist, it should cleanly throw "Document file not found" error, NOT a PowerShell parsing error
+      // When sumatraPath is null, it should cleanly reject with clear engine unavailable error
       await expect(
-        WindowsPrintSpooler.printDocument(missingFile, printerName, job, null)
-      ).rejects.toThrow(/Document file not found/i);
+        WindowsPrintSpooler.printDocument(pdfFile, printerName, job, null)
+      ).rejects.toThrow(/PDF printing engine unavailable: SumatraPDF is not installed/i);
     });
   });
 

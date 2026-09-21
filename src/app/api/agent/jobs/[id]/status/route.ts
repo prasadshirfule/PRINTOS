@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { waitUntil } from '@vercel/functions';
 import { getRepository, UnauthorizedAgentJobError } from '@/lib/repository';
 import { AgentJobStatusUpdate } from '@/types/printos';
 import { NotificationService } from '@/lib/whatsapp/notification-service';
+import { WhatsAppWorkerEngine } from '@/lib/whatsapp/worker-engine';
+import { createLogger } from '@/lib/observability/logger';
+
+const logger = createLogger('AgentJobStatusRoute');
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
@@ -34,6 +39,24 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       const order = await repo.getOrder(updatedJob.orderId);
       if (order) {
         await NotificationService.notifyOrderStatus(repo, order, updatedJob.status as any, body.errorMessage);
+      }
+
+      // Eagerly drain outbox so notifications are delivered immediately without waiting for cron
+      if (process.env.DISABLE_EAGER_WORKER !== 'true') {
+        try {
+          const worker = new WhatsAppWorkerEngine(repo);
+          waitUntil(
+            worker.runCycle().catch((e) => {
+              logger.warn('Background worker cycle failed, deferring to cron', {
+                errorMessage: e instanceof Error ? e.message : String(e),
+              });
+            })
+          );
+        } catch (workerErr) {
+          logger.warn('Failed to start eager worker cycle, deferring to cron', {
+            errorMessage: workerErr instanceof Error ? workerErr.message : String(workerErr),
+          });
+        }
       }
     }
 
