@@ -7,6 +7,7 @@ export interface Shop {
   phone?: string | null;
   address?: string | null;
   currency: string;
+  timezone?: string | null;
   isActive: boolean;
   createdAt: string;
   updatedAt: string;

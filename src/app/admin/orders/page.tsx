@@ -1,8 +1,9 @@
-﻿'use client';
+'use client';
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { PrintOrder } from '@/types/printos';
+import { formatCustomerContact } from '@/lib/utils/phone-formatter';
 
 export default function AdminOrdersPage() {
   const [orders, setOrders] = useState<PrintOrder[]>([]);
@@ -90,7 +91,7 @@ export default function AdminOrdersPage() {
                     </td>
                     <td className="px-6 py-4 text-slate-700">
                       <div>{o.customerName || 'Customer'}</div>
-                      <div className="text-xs text-slate-400">{o.customerPhone}</div>
+                      <div className="text-xs text-slate-400">{formatCustomerContact(o.customerPhone)}</div>
                     </td>
                     <td className="px-6 py-4 font-medium text-slate-900 truncate max-w-xs">
                       {o.originalFilename}

@@ -1,8 +1,9 @@
-﻿'use client';
+'use client';
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { PrintJob, PrintOrder } from '@/types/printos';
+import { formatCustomerContact } from '@/lib/utils/phone-formatter';
 
 export default function AdminQueuePage() {
   const [jobs, setJobs] = useState<PrintJob[]>([]);
@@ -90,7 +91,7 @@ export default function AdminQueuePage() {
                       </td>
                       <td className="px-6 py-4 text-slate-700">
                         <div>{order?.customerName || 'Customer'}</div>
-                        <div className="text-xs text-slate-400">{order?.customerPhone || '—'}</div>
+                        <div className="text-xs text-slate-400">{formatCustomerContact(order?.customerPhone)}</div>
                       </td>
                       <td className="px-6 py-4 text-slate-900 font-medium truncate max-w-xs">
                         {order?.originalFilename || 'document.pdf'}

@@ -64,7 +64,7 @@ export interface IPrintOSRepository {
   createOrder(order: PrintOrder): Promise<PrintOrder>;
   getOrder(id: string): Promise<PrintOrder | null>;
   getOrderByNumber(orderNumber: string): Promise<PrintOrder | null>;
-  listOrders(filters?: { status?: OrderStatus; limit?: number; shopId?: string }): Promise<PrintOrder[]>;
+  listOrders(filters?: { status?: OrderStatus; limit?: number; shopId?: string; todayOnly?: boolean }): Promise<PrintOrder[]>;
   updateOrderStatus(
     orderId: string,
     nextStatus: OrderStatus,

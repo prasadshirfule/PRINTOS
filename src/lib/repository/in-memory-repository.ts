@@ -31,6 +31,7 @@ import {
   ResourceNotFoundError,
   StaleConversationVersionError,
 } from './repository.interface';
+import { isSameDayInTimezone, getShopTimezone, DEFAULT_SHOP_TIMEZONE } from '@/lib/utils/timezone-utils';
 
 export class InMemoryPrintOSRepository implements IPrintOSRepository {
   private shops: Map<string, Shop> = new Map();
@@ -164,13 +165,19 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
     return null;
   }
 
-  public async listOrders(filters?: { status?: OrderStatus; limit?: number; shopId?: string }): Promise<PrintOrder[]> {
+  public async listOrders(filters?: { status?: OrderStatus; limit?: number; shopId?: string; todayOnly?: boolean }): Promise<PrintOrder[]> {
     let list = Array.from(this.orders.values());
     if (filters?.shopId) {
       list = list.filter((o) => o.shopId === filters.shopId);
     }
     if (filters?.status) {
       list = list.filter((o) => o.status === filters.status);
+    }
+    if (filters?.todayOnly) {
+      const shop = filters.shopId ? this.shops.get(filters.shopId) : null;
+      const tz = getShopTimezone(shop);
+      const now = new Date();
+      list = list.filter((o) => isSameDayInTimezone(o.createdAt, now, tz));
     }
     list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     if (filters?.limit) {
@@ -500,27 +507,42 @@ export class InMemoryPrintOSRepository implements IPrintOSRepository {
   }
 
   public async getDashboardMetrics(shopId?: string): Promise<DashboardMetrics> {
-    let allOrders = Array.from(this.orders.values());
-    if (shopId) {
-      allOrders = allOrders.filter((o) => o.shopId === shopId);
-    }
+    const targetShopId = shopId || DEFAULT_SHOP_ID;
+    const shop = this.shops.get(targetShopId);
+    const tz = getShopTimezone(shop);
+    const now = new Date();
+
+    const allOrders = Array.from(this.orders.values()).filter((o) => (o.shopId || DEFAULT_SHOP_ID) === targetShopId);
+
+    // Active queues
     const queuedCount = allOrders.filter((o) => o.status === 'QUEUED').length;
     const printingCount = allOrders.filter((o) => o.status === 'PRINTING').length;
-    const completedCount = allOrders.filter((o) => o.status === 'COMPLETED').length;
-    const failedCount = allOrders.filter((o) => o.status === 'FAILED').length;
-    const totalRevenuePaisa = allOrders
-      .filter((o) => o.paymentStatus === 'PAID')
-      .reduce((sum, o) => sum + o.totalAmountPaisa, 0);
-    const totalPagesPrinted = allOrders
-      .filter((o) => o.status === 'COMPLETED')
-      .reduce((sum, o) => sum + o.selectedPageCount * o.copies, 0);
+
+    // Today's created orders
+    const todayCreatedOrders = allOrders.filter((o) => isSameDayInTimezone(o.createdAt, now, tz));
+
+    // Today's completed orders (evaluated based on completion timestamp when available, fallback to createdAt)
+    const todayCompletedOrders = allOrders.filter(
+      (o) => o.status === 'COMPLETED' && isSameDayInTimezone(o.completedAt || o.createdAt, now, tz)
+    );
+
+    // Today's failed orders
+    const todayFailedOrders = allOrders.filter(
+      (o) => o.status === 'FAILED' && isSameDayInTimezone(o.failedAt || o.createdAt, now, tz)
+    );
+
+    // Revenue: sum total_amount_paisa ONLY for today's COMPLETED orders
+    const totalRevenuePaisa = todayCompletedOrders.reduce((sum, o) => sum + o.totalAmountPaisa, 0);
+
+    // Pages printed: sum selectedPageCount * copies for today's COMPLETED orders
+    const totalPagesPrinted = todayCompletedOrders.reduce((sum, o) => sum + o.selectedPageCount * o.copies, 0);
 
     return {
-      todayOrders: allOrders.length,
+      todayOrders: todayCreatedOrders.length,
       queued: queuedCount,
       printing: printingCount,
-      completed: completedCount,
-      failed: failedCount,
+      completed: todayCompletedOrders.length,
+      failed: todayFailedOrders.length,
       revenuePaisa: totalRevenuePaisa,
       pagesPrinted: totalPagesPrinted,
     };

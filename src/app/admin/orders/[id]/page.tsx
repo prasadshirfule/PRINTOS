@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { PrintOrder, PrintJob, PrintOrderEvent } from '@/types/printos';
+import { formatCustomerContact } from '@/lib/utils/phone-formatter';
 
 export default function OrderDetailsPage() {
   const params = useParams();
@@ -202,8 +203,8 @@ export default function OrderDetailsPage() {
             </h2>
             <div className="space-y-2 text-sm">
               <div>
-                <span className="text-xs text-slate-400 block">Customer Phone</span>
-                <span className="font-mono font-medium text-slate-800">{order.customerPhone}</span>
+                <span className="text-xs text-slate-400 block">Customer Contact</span>
+                <span className="font-mono font-medium text-slate-800">{formatCustomerContact(order.customerPhone)}</span>
               </div>
               <div>
                 <span className="text-xs text-slate-400 block">Payment Status</span>

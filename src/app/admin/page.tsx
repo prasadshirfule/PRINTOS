@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { PrintOrder, Printer, PrintJob } from '@/types/printos';
+import { formatCustomerContact } from '@/lib/utils/phone-formatter';
 
 interface DashboardData {
   metrics: {
@@ -232,7 +233,7 @@ export default function AdminDashboardPage() {
                     </td>
                     <td className="px-6 py-4 text-slate-700">
                       <div>{order.customerName || 'Customer'}</div>
-                      <div className="text-xs text-slate-400">{order.customerPhone}</div>
+                      <div className="text-xs text-slate-400">{formatCustomerContact(order.customerPhone)}</div>
                     </td>
                     <td className="px-6 py-4 text-slate-700">
                       <div className="font-medium truncate max-w-xs">{order.originalFilename}</div>

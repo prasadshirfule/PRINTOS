@@ -43,7 +43,8 @@ describe('Windows Print Agent & Spooler Subsystem', () => {
       };
 
       const settings = WindowsPrintSpooler.buildSumatraPrintSettings(job);
-      expect(settings).toBe('duplex,color,1-5, 8,copies=3,paper=A4');
+      expect(settings).toBe('duplex,color,1-5, 8,3x,paper=A4');
+      expect(settings).not.toContain('copies=');
     });
 
     it('preserves 2 copies, BW, and BOTH_SIDES for P86927 document settings', () => {
@@ -61,7 +62,36 @@ describe('Windows Print Agent & Spooler Subsystem', () => {
       };
 
       const settings = WindowsPrintSpooler.buildSumatraPrintSettings(job);
-      expect(settings).toBe('duplex,monochrome,copies=2,paper=A4');
+      expect(settings).toBe('duplex,monochrome,2x,paper=A4');
+      expect(settings).not.toContain('copies=');
+    });
+
+    it('verifies repeat syntax scaling across copies 1, 2, 3, 10 while preserving settings', () => {
+      const baseJob: ClaimedJob = {
+        jobId: 'job_scaling',
+        orderId: 'ord_scaling',
+        orderNumber: 'P1003',
+        storagePath: 'orders/test.pdf',
+        originalFilename: 'test.pdf',
+        printOptions: {},
+        colorMode: 'COLOR',
+        paperSize: 'A4',
+        printSides: 'BOTH_SIDES',
+        copies: 1,
+        pageSelection: '1-3',
+      };
+
+      // 1 copy -> no repeat token
+      expect(WindowsPrintSpooler.buildSumatraPrintSettings({ ...baseJob, copies: 1 })).toBe('duplex,color,1-3,paper=A4');
+
+      // 2 copies -> 2x
+      expect(WindowsPrintSpooler.buildSumatraPrintSettings({ ...baseJob, copies: 2 })).toBe('duplex,color,1-3,2x,paper=A4');
+
+      // 3 copies -> 3x
+      expect(WindowsPrintSpooler.buildSumatraPrintSettings({ ...baseJob, copies: 3 })).toBe('duplex,color,1-3,3x,paper=A4');
+
+      // 10 copies -> 10x
+      expect(WindowsPrintSpooler.buildSumatraPrintSettings({ ...baseJob, copies: 10 })).toBe('duplex,color,1-3,10x,paper=A4');
     });
   });
 

@@ -13,7 +13,7 @@ export async function GET(req: NextRequest) {
 
   const [metrics, orders, jobs, printers, shop] = await Promise.all([
     repo.getDashboardMetrics(shopId),
-    repo.listOrders({ limit: 50, shopId }),
+    repo.listOrders({ limit: 50, shopId, todayOnly: true }),
     repo.listJobs({ limit: 50, shopId }),
     repo.listPrinters({ shopId }),
     repo.getShop(shopId),

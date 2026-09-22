@@ -184,9 +184,9 @@ export class WindowsPrintSpooler {
       settings.push(job.pageSelection);
     }
 
-    // Copies
+    // Copies (SumatraPDF repeat syntax: 2x, 3x, 10x; no token for 1 copy)
     if (job.copies && job.copies > 1) {
-      settings.push(`copies=${job.copies}`);
+      settings.push(`${job.copies}x`);
     }
 
     // Paper size

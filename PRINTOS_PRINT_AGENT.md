@@ -105,7 +105,7 @@ npm run agent:mock:fail
 ### Method 1: SumatraPDF CLI Execution
 SumatraPDF executes silent background printing with strict hardware flag control:
 ```powershell
-SumatraPDF.exe -print-to "<PrinterName>" -print-settings "duplex,monochrome,1-5,copies=2,paper=A4" -silent "<filePath>"
+SumatraPDF.exe -print-to "<PrinterName>" -print-settings "duplex,monochrome,1-5,2x,paper=A4" -silent "<filePath>"
 ```
 
 | Flag | Values | Description |
@@ -113,7 +113,7 @@ SumatraPDF.exe -print-to "<PrinterName>" -print-settings "duplex,monochrome,1-5,
 | `duplex` / `simplex` | `duplex`, `simplex` | Double-sided vs single-sided printing |
 | `color` / `monochrome` | `color`, `monochrome` | Full color vs black-and-white mode |
 | `<page-range>` | `1-5, 8, 10-12` | Specific pages to print (omitted for all pages) |
-| `copies=<N>` | `copies=1`, `copies=3` | Number of physical copies |
+| `<N>x` | `2x`, `3x`, `10x` | Repeat copy count (omitted for 1 copy) |
 | `paper=<Size>` | `paper=A4`, `paper=Legal` | Target paper tray selection |
 
 ---

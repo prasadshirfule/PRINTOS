@@ -5,6 +5,7 @@ import { WhatsAppStateMachine } from './state-machine';
 import { WhatsAppMediaDownloader } from './media-downloader';
 import { getWhatsAppProvider } from './provider';
 import { WhatsAppInboxService } from './inbox-service';
+import { WhatsAppOutboxService } from './outbox-service';
 
 export interface WorkerBatchResult {
   workerId: string;
@@ -202,29 +203,76 @@ export class WhatsAppWorkerEngine {
       };
     }
 
-    // If inbound event contains media, ingest and validate magic-bytes
+    // If inbound event contains media, immediately enqueue acknowledgement before expensive ingestion
     if (event.mediaId && (event.type === 'document' || event.type === 'image')) {
-      const provider = getWhatsAppProvider();
-      const inlineBase64 =
-        (rawPayload?.data as any)?.media?.data ||
-        (rawPayload?.media as any)?.data ||
-        (rawPayload?.inlineBase64 as string);
+      const recipient = event.from || item.senderPhone;
+      const messageId = item.messageId || event.wamid;
 
-      const ingested = await this.mediaDownloader.ingestMedia(
-        provider,
-        event.mediaId,
-        event.filename,
-        item.senderPhone,
-        typeof inlineBase64 === 'string' ? inlineBase64 : undefined
+      // 1. Persist/enqueue immediate idempotent acknowledgement
+      await WhatsAppOutboxService.queueText(
+        this.repo,
+        recipient,
+        '📥 Document received. Processing your file now...',
+        null,
+        null,
+        `ack_${messageId}`
       );
 
-      // Attach ingested metadata to event for state machine
-      event.filename = ingested.filename;
-      event.mimeType = ingested.mimeType;
-      event.fileSize = ingested.fileSizeBytes;
-      event.rawPayload.storagePath = ingested.storagePath;
-      event.rawPayload.pageCount = ingested.pageCount;
-      event.rawPayload.fileType = ingested.fileType;
+      try {
+        const provider = getWhatsAppProvider();
+        const inlineBase64 =
+          (rawPayload?.data as any)?.media?.data ||
+          (rawPayload?.media as any)?.data ||
+          (rawPayload?.inlineBase64 as string);
+
+        const ingested = await this.mediaDownloader.ingestMedia(
+          provider,
+          event.mediaId,
+          event.filename,
+          item.senderPhone,
+          typeof inlineBase64 === 'string' ? inlineBase64 : undefined
+        );
+
+        // Attach ingested metadata to event for state machine
+        event.filename = ingested.filename;
+        event.mimeType = ingested.mimeType;
+        event.fileSize = ingested.fileSizeBytes;
+        event.rawPayload.storagePath = ingested.storagePath;
+        event.rawPayload.pageCount = ingested.pageCount;
+        event.rawPayload.fileType = ingested.fileType;
+      } catch (mediaErr: unknown) {
+        const rawMessage = mediaErr instanceof Error ? mediaErr.message : String(mediaErr);
+        let safeError = 'Failed to process attached document. Please ensure it is a valid PDF, JPEG, or PNG under 50MB.';
+        if (rawMessage.includes('50MB') || rawMessage.includes('exceeds maximum limit')) {
+          safeError = 'File exceeds the 50MB maximum size limit. Please upload a smaller file.';
+        } else if (
+          rawMessage.includes('Unrecognized file signature') ||
+          rawMessage.includes('magic-byte') ||
+          rawMessage.includes('signature')
+        ) {
+          safeError = 'Document validation failed: Unrecognized file format. Only valid PDF, JPEG, and PNG files are supported.';
+        } else if (rawMessage.includes('empty') || rawMessage.includes('0 bytes')) {
+          safeError = 'Downloaded document is empty (0 bytes). Please re-upload the file.';
+        } else if (
+          rawMessage.includes('corrupted') ||
+          rawMessage.includes('password') ||
+          rawMessage.includes('encrypted')
+        ) {
+          safeError = 'Could not parse document. Please ensure the PDF is not encrypted or corrupted.';
+        }
+
+        await WhatsAppOutboxService.queueText(
+          this.repo,
+          recipient,
+          `⚠️ ${safeError}`,
+          null,
+          null,
+          `media_err_${messageId}`
+        );
+
+        // Rethrow original error for worker retry & failure tracking
+        throw mediaErr;
+      }
     }
 
     // Advance conversation state machine
