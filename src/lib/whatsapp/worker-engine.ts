@@ -222,7 +222,11 @@ export class WhatsAppWorkerEngine {
         const provider = getWhatsAppProvider();
         const inlineBase64 =
           (rawPayload?.data as any)?.media?.data ||
+          (rawPayload?.data as any)?.mediaData?.data ||
+          (rawPayload?.data as any)?.body ||
           (rawPayload?.media as any)?.data ||
+          (rawPayload?.mediaData as any)?.data ||
+          (rawPayload?.body as string) ||
           (rawPayload?.inlineBase64 as string);
 
         const ingested = await this.mediaDownloader.ingestMedia(
@@ -230,7 +234,9 @@ export class WhatsAppWorkerEngine {
           event.mediaId,
           event.filename,
           item.senderPhone,
-          typeof inlineBase64 === 'string' ? inlineBase64 : undefined
+          typeof inlineBase64 === 'string' ? inlineBase64 : undefined,
+          event.mimeType,
+          messageId
         );
 
         // Attach ingested metadata to event for state machine
@@ -242,23 +248,40 @@ export class WhatsAppWorkerEngine {
         event.rawPayload.fileType = ingested.fileType;
       } catch (mediaErr: unknown) {
         const rawMessage = mediaErr instanceof Error ? mediaErr.message : String(mediaErr);
-        let safeError = 'Failed to process attached document. Please ensure it is a valid PDF, JPEG, or PNG under 50MB.';
-        if (rawMessage.includes('50MB') || rawMessage.includes('exceeds maximum limit')) {
-          safeError = 'File exceeds the 50MB maximum size limit. Please upload a smaller file.';
+        const lower = rawMessage.toLowerCase();
+        let safeError = "We couldn't process your document. Please ensure it is a valid PDF, JPG, or PNG under 50MB.";
+
+        if (lower.includes('50mb') || lower.includes('exceeds') || lower.includes('too large') || lower.includes('size limit')) {
+          safeError = 'This file is too large. Maximum size is 50MB.';
         } else if (
-          rawMessage.includes('Unrecognized file signature') ||
-          rawMessage.includes('magic-byte') ||
-          rawMessage.includes('signature')
+          lower.includes('download') ||
+          lower.includes('timeout') ||
+          lower.includes('fetch') ||
+          lower.includes('network') ||
+          lower.includes('timed out')
         ) {
-          safeError = 'Document validation failed: Unrecognized file format. Only valid PDF, JPEG, and PNG files are supported.';
-        } else if (rawMessage.includes('empty') || rawMessage.includes('0 bytes')) {
-          safeError = 'Downloaded document is empty (0 bytes). Please re-upload the file.';
+          safeError = "We couldn't download your document. Please try sending it again.";
+        } else if (lower.includes('empty') || lower.includes('0 bytes') || lower.includes('0 pages')) {
+          safeError = 'Downloaded document is empty (0 bytes). Please send the file again.';
         } else if (
-          rawMessage.includes('corrupted') ||
-          rawMessage.includes('password') ||
-          rawMessage.includes('encrypted')
+          lower.includes('parse pdf') ||
+          lower.includes('pdf document') ||
+          lower.includes('pdf parsing') ||
+          lower.includes('corrupted') ||
+          lower.includes('encrypted') ||
+          lower.includes('password')
         ) {
-          safeError = 'Could not parse document. Please ensure the PDF is not encrypted or corrupted.';
+          safeError = "We couldn't read this PDF. Please try sending the file again.";
+        } else if (
+          lower.includes('unrecognized file signature') ||
+          lower.includes('unsupported') ||
+          lower.includes('file format') ||
+          lower.includes('magic-byte') ||
+          lower.includes('signature')
+        ) {
+          safeError = "This file type isn't supported. Please send a PDF, JPG, or PNG.";
+        } else if (lower.includes('storage') || lower.includes('upload')) {
+          safeError = "We couldn't save your document. Please try again.";
         }
 
         await WhatsAppOutboxService.queueText(

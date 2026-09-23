@@ -243,7 +243,7 @@ export class OpenWAWhatsAppProvider implements IWhatsAppProvider {
     // Extract chatId from messageId if present (format: [fromMe]_[chatId]_[id])
     const parts = mediaId.split('_');
     const chatId = parts.length >= 3 ? parts[1] : `${this.sessionId}@c.us`;
-    const messageId = parts.length >= 3 ? parts[2] : mediaId;
+    const messageId = parts.length >= 3 ? parts.slice(2).join('_') : mediaId;
 
     const url = `${this.baseUrl}/api/sessions/${encodeURIComponent(this.sessionId)}/messages/${encodeURIComponent(
       chatId

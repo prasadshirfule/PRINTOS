@@ -687,4 +687,123 @@ describe('OpenWA WhatsApp Provider & Webhook Integration Suite', () => {
     expect(lastSendCall).toBeDefined();
     expect(JSON.parse(lastSendCall[1].body).chatId).toBe('20495684599884@lid');
   });
+
+  // 12. Real-World 30-Page PDF and OpenWA JSON Media Response Ingestion
+  it('successfully ingests a 30-page PDF (~800KB) and extracts true page count of 30', async () => {
+    const downloader = new WhatsAppMediaDownloader();
+    const provider = new OpenWAWhatsAppProvider({ baseUrl: 'http://127.0.0.1:2785', apiKey: 'test-key' });
+
+    const pdfDoc = await PDFDocument.create();
+    for (let i = 0; i < 30; i++) {
+      const page = pdfDoc.addPage([595, 842]);
+      page.drawText(`Page ${i + 1} of AI(UN-05) document test`);
+    }
+    const pdfBytes = await pdfDoc.save();
+    const pdfBuffer = Buffer.from(pdfBytes);
+
+    const providerMock = {
+      sendText: vi.fn(),
+      sendInteractiveButtons: vi.fn(),
+      sendDocument: vi.fn(),
+      getMediaUrl: vi.fn().mockResolvedValue({
+        url: 'http://127.0.0.1:2785/api/sessions/session-printos/messages/918080750206@c.us/msg_30page_pdf/media',
+        mimeType: 'application/pdf',
+      }),
+      downloadMediaStream: vi.fn().mockResolvedValue({
+        stream: Readable.from([pdfBuffer]),
+        contentLength: pdfBuffer.length,
+      }),
+    };
+
+    const result = await downloader.ingestMedia(
+      providerMock as any,
+      'false_918080750206@c.us_3EB0AIUN05_1',
+      'AI(UN-05).pdf',
+      '918080750206'
+    );
+
+    expect(result.fileType).toBe('pdf');
+    expect(result.filename).toBe('AI_UN-05_.pdf');
+    expect(result.pageCount).toBe(30);
+    expect(result.fileSizeBytes).toBe(pdfBuffer.length);
+    expect(result.storagePath).toContain('whatsapp/918080750206/');
+  });
+
+  it('handles OpenWA REST JSON-wrapped media response { data: "data:application/pdf;base64,..." }', async () => {
+    const downloader = new WhatsAppMediaDownloader();
+
+    const pdfDoc = await PDFDocument.create();
+    pdfDoc.addPage([595, 842]);
+    pdfDoc.addPage([595, 842]);
+    pdfDoc.addPage([595, 842]);
+    const pdfBytes = await pdfDoc.save();
+    const base64Data = Buffer.from(pdfBytes).toString('base64');
+    const jsonResponseBody = Buffer.from(
+      JSON.stringify({
+        data: `data:application/pdf;base64,${base64Data}`,
+        mimetype: 'application/pdf',
+        filename: 'notes.pdf',
+      })
+    );
+
+    const providerMock = {
+      sendText: vi.fn(),
+      sendInteractiveButtons: vi.fn(),
+      sendDocument: vi.fn(),
+      getMediaUrl: vi.fn().mockResolvedValue({
+        url: 'http://127.0.0.1:2785/api/sessions/session-printos/messages/918080750206@c.us/msg_json_media/media',
+        mimeType: 'application/json',
+      }),
+      downloadMediaStream: vi.fn().mockResolvedValue({
+        stream: Readable.from([jsonResponseBody]),
+        contentLength: jsonResponseBody.length,
+      }),
+    };
+
+    const result = await downloader.ingestMedia(
+      providerMock as any,
+      'false_918080750206@c.us_3EB0JSONMEDIA',
+      'notes.pdf',
+      '918080750206'
+    );
+
+    expect(result.fileType).toBe('pdf');
+    expect(result.pageCount).toBe(3);
+    expect(result.mimeType).toBe('application/pdf');
+  });
+
+  it('detects and ingests PDF with leading UTF-8 BOM or whitespace header offset', async () => {
+    const downloader = new WhatsAppMediaDownloader();
+
+    const pdfDoc = await PDFDocument.create();
+    pdfDoc.addPage([595, 842]);
+    const pdfBytes = await pdfDoc.save();
+    // Prepend UTF-8 BOM (\xEF\xBB\xBF) and a comment line before standard %PDF-
+    const bomPrefix = Buffer.from([0xef, 0xbb, 0xbf]);
+    const bomPdf = Buffer.concat([bomPrefix, Buffer.from(pdfBytes)]);
+
+    const providerMock = {
+      sendText: vi.fn(),
+      sendInteractiveButtons: vi.fn(),
+      sendDocument: vi.fn(),
+      getMediaUrl: vi.fn().mockResolvedValue({
+        url: 'http://127.0.0.1:2785/api/sessions/session-printos/messages/918080750206@c.us/msg_bom/media',
+        mimeType: 'application/pdf',
+      }),
+      downloadMediaStream: vi.fn().mockResolvedValue({
+        stream: Readable.from([bomPdf]),
+        contentLength: bomPdf.length,
+      }),
+    };
+
+    const result = await downloader.ingestMedia(
+      providerMock as any,
+      'false_918080750206@c.us_3EB0BOM',
+      'bom_test.pdf',
+      '918080750206'
+    );
+
+    expect(result.fileType).toBe('pdf');
+    expect(result.pageCount).toBe(1);
+  });
 });

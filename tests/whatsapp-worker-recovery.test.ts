@@ -325,5 +325,59 @@ describe('Phase 2: WhatsApp Worker Recovery, Lease Expiration & Concurrency Safe
       // 2nd message: Configuration prompt with buttons
       expect(mockProvider.sentMessages[1].message).toContain('Received *project_final.pdf* (2 pages)');
     });
+
+    it('processes 30-page PDF AI(UN-05).pdf via OpenWA data.body data-URL payload without errors', async () => {
+      const pdfDoc = await PDFDocument.create();
+      for (let i = 0; i < 30; i++) {
+        const page = pdfDoc.addPage([595, 842]);
+        page.drawText(`AI(UN-05) Page ${i + 1}`);
+      }
+      const pdfBytes = await pdfDoc.save();
+      const base64Data = Buffer.from(pdfBytes).toString('base64');
+      const dataUrl = `data:application/pdf;base64,${base64Data}`;
+
+      // Simulate real-world OpenWA webhook payload format for AI(UN-05).pdf
+      await repo.enqueueInboxItem({
+        messageId: 'false_918080750206@c.us_3EB0AIUN05_TEST',
+        senderPhone: '918080750206',
+        rawPayload: {
+          event: 'message',
+          sessionId: 'session-printos',
+          data: {
+            id: 'false_918080750206@c.us_3EB0AIUN05_TEST',
+            from: '918080750206@c.us',
+            type: 'document',
+            body: dataUrl,
+            mimetype: 'application/pdf',
+            filename: 'AI(UN-05).pdf',
+            hasMedia: true,
+          },
+        },
+      });
+
+      const engine = new WhatsAppWorkerEngine(repo);
+      await engine.runCycle(10, 120);
+
+      // Verify conversation
+      const conv = await repo.getConversation('918080750206');
+      expect(conv).toBeDefined();
+      expect(conv?.currentState).toBe('COLLECTING_COLOR');
+      expect(conv?.sessionData?.originalFilename).toBe('AI_UN-05_.pdf');
+      expect(conv?.sessionData?.pageCount).toBe(30);
+
+      // Verify outbox messages
+      const outboxItems = Array.from((repo as any).outbox.values()) as any[];
+      const errItem = outboxItems.find((o) => (o.payload?.idempotencyKey || '').startsWith('media_err_'));
+      expect(errItem).toBeUndefined(); // No media ingestion error
+
+      const ackItem = outboxItems.find((o) => (o.payload?.idempotencyKey || '').startsWith('ack_'));
+      expect(ackItem).toBeDefined();
+      expect(ackItem.payload?.body).toContain('Document received. Processing your file now...');
+
+      // Verify prompt message sent to customer
+      expect(mockProvider.sentMessages.length).toBe(2);
+      expect(mockProvider.sentMessages[0].message).toContain('Document received. Processing your file now...');
+      expect(mockProvider.sentMessages[1].message).toContain('30 pages');
+    });
   });
 });
