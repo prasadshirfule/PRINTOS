@@ -806,4 +806,71 @@ describe('OpenWA WhatsApp Provider & Webhook Integration Suite', () => {
     expect(result.fileType).toBe('pdf');
     expect(result.pageCount).toBe(1);
   });
+
+  // 13. OpenWA Media URL Construction & Full Serialized ID Preservation
+  it('constructs getMediaUrl with full serialized messageId for real production LID document', async () => {
+    const provider = new OpenWAWhatsAppProvider({
+      baseUrl: 'http://127.0.0.1:2785',
+      apiKey: 'test-key',
+      sessionId: 'session-printos',
+    });
+
+    const productionMediaId = 'false_20495684599884@lid_AC81C6D9DFFB0AB4470EDEC753A97670';
+    const { url, mimeType } = await provider.getMediaUrl(productionMediaId);
+
+    expect(mimeType).toBe('application/octet-stream');
+    expect(url).toBe(
+      'http://127.0.0.1:2785/api/sessions/session-printos/messages/20495684599884%40lid/false_20495684599884%40lid_AC81C6D9DFFB0AB4470EDEC753A97670/media'
+    );
+  });
+
+  it('preserves full serialized messageId when message portion contains multiple underscores', async () => {
+    const provider = new OpenWAWhatsAppProvider({
+      baseUrl: 'http://127.0.0.1:2785',
+      apiKey: 'test-key',
+      sessionId: 'session-printos',
+    });
+
+    const underscoreMediaId = 'false_20495684599884@lid_MESSAGE_PART_ONE_PART_TWO';
+    const { url } = await provider.getMediaUrl(underscoreMediaId);
+
+    expect(url).toBe(
+      'http://127.0.0.1:2785/api/sessions/session-printos/messages/20495684599884%40lid/false_20495684599884%40lid_MESSAGE_PART_ONE_PART_TWO/media'
+    );
+    expect(url).not.toContain('/messages/20495684599884%40lid/MESSAGE_PART_ONE_PART_TWO/media');
+  });
+
+  it('handles standard @c.us user mediaId and fallback raw mediaId in getMediaUrl', async () => {
+    const provider = new OpenWAWhatsAppProvider({
+      baseUrl: 'http://127.0.0.1:2785',
+      apiKey: 'test-key',
+      sessionId: 'session-printos',
+    });
+
+    // Standard user serialized ID
+    const userMediaId = 'false_919876543210@c.us_3EB0DOC1234';
+    const resUser = await provider.getMediaUrl(userMediaId);
+    expect(resUser.url).toBe(
+      'http://127.0.0.1:2785/api/sessions/session-printos/messages/919876543210%40c.us/false_919876543210%40c.us_3EB0DOC1234/media'
+    );
+
+    // Group serialized ID
+    const groupMediaId = 'false_120363023456789012@g.us_3EB0GRP1234';
+    const resGroup = await provider.getMediaUrl(groupMediaId);
+    expect(resGroup.url).toBe(
+      'http://127.0.0.1:2785/api/sessions/session-printos/messages/120363023456789012%40g.us/false_120363023456789012%40g.us_3EB0GRP1234/media'
+    );
+
+    // Non-serialized raw ID fallback
+    const rawMediaId = 'raw_unserialized_id_999';
+    const resRaw = await provider.getMediaUrl(rawMediaId);
+    expect(resRaw.url).toBe(
+      'http://127.0.0.1:2785/api/sessions/session-printos/messages/session-printos%40c.us/raw_unserialized_id_999/media'
+    );
+
+    // Full HTTP/HTTPS URL
+    const httpMediaUrl = 'https://custom-storage.example.com/file.pdf';
+    const resHttp = await provider.getMediaUrl(httpMediaUrl);
+    expect(resHttp.url).toBe('https://custom-storage.example.com/file.pdf');
+  });
 });

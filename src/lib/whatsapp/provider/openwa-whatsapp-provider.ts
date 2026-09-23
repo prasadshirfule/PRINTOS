@@ -240,10 +240,11 @@ export class OpenWAWhatsAppProvider implements IWhatsAppProvider {
       return { url: mediaId, mimeType: 'application/octet-stream' };
     }
 
-    // Extract chatId from messageId if present (format: [fromMe]_[chatId]_[id])
+    // Extract chatId from serialized messageId if present (format: [fromMe]_[chatId]_[id])
     const parts = mediaId.split('_');
-    const chatId = parts.length >= 3 ? parts[1] : `${this.sessionId}@c.us`;
-    const messageId = parts.length >= 3 ? parts.slice(2).join('_') : mediaId;
+    const isSerialized = parts.length >= 3 && (parts[0] === 'false' || parts[0] === 'true' || parts[1].includes('@'));
+    const chatId = isSerialized ? parts[1] : `${this.sessionId}@c.us`;
+    const messageId = mediaId;
 
     const url = `${this.baseUrl}/api/sessions/${encodeURIComponent(this.sessionId)}/messages/${encodeURIComponent(
       chatId
