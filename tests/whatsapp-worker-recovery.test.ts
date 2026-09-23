@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { PDFDocument } from 'pdf-lib';
 import { InMemoryPrintOSRepository } from '@/lib/repository/in-memory-repository';
 import { WhatsAppWorkerEngine } from '@/lib/whatsapp/worker-engine';
@@ -378,6 +378,190 @@ describe('Phase 2: WhatsApp Worker Recovery, Lease Expiration & Concurrency Safe
       expect(mockProvider.sentMessages.length).toBe(2);
       expect(mockProvider.sentMessages[0].message).toContain('Document received. Processing your file now...');
       expect(mockProvider.sentMessages[1].message).toContain('30 pages');
+    });
+
+    it('processes real production omitted-media payload for AI(UN-06).pdf (35 pages) via download stream', async () => {
+      const pdfDoc = await PDFDocument.create();
+      for (let i = 0; i < 35; i++) {
+        const page = pdfDoc.addPage([595, 842]);
+        page.drawText(`AI(UN-06) Page ${i + 1}`);
+      }
+      const pdfBytes = await pdfDoc.save();
+      const pdfBuffer = Buffer.from(pdfBytes);
+
+      let downloadStreamCalled = false;
+      const customProvider = {
+        sendText: vi.fn().mockResolvedValue({ providerMessageId: 'msg_txt' }),
+        sendInteractiveButtons: vi.fn().mockResolvedValue({ providerMessageId: 'msg_btn' }),
+        sendDocument: vi.fn().mockResolvedValue({ providerMessageId: 'msg_doc' }),
+        getMediaUrl: vi.fn().mockResolvedValue({
+          url: 'http://127.0.0.1:2785/api/sessions/session-printos/messages/20495684599884@lid/msg_35pages/media',
+          mimeType: 'application/pdf',
+        }),
+        downloadMediaStream: vi.fn().mockImplementation(async () => {
+          downloadStreamCalled = true;
+          const { Readable } = await import('stream');
+          return {
+            stream: Readable.from([pdfBuffer]),
+            contentLength: pdfBuffer.length,
+          };
+        }),
+      };
+      setWhatsAppProvider(customProvider as any);
+
+      // Exact production payload structure where body is filename and media.omitted is true
+      await repo.enqueueInboxItem({
+        messageId: 'false_20495684599884@lid_AC79B8926BA9D762CC11E793A8B95332',
+        senderPhone: '20495684599884@lid',
+        rawPayload: {
+          event: 'message.received',
+          sessionId: 'session-printos',
+          data: {
+            id: 'false_20495684599884@lid_AC79B8926BA9D762CC11E793A8B95332',
+            to: '918080750206@c.us',
+            from: '20495684599884@lid',
+            chatId: '20495684599884@lid',
+            type: 'document',
+            body: 'AI(UN-06).pdf', // Filename in body, NOT base64!
+            fromMe: false,
+            media: {
+              omitted: true,
+              filename: 'AI(UN-06).pdf',
+              mimetype: 'application/pdf',
+              sizeBytes: 891847,
+            },
+          },
+        },
+      });
+
+      const engine = new WhatsAppWorkerEngine(repo);
+      await engine.runCycle(10, 120);
+
+      // Verify downloadMediaStream was invoked
+      expect(downloadStreamCalled).toBe(true);
+      expect(customProvider.getMediaUrl).toHaveBeenCalled();
+
+      // Verify conversation state and true 35 page count
+      const conv = await repo.getConversation('20495684599884@lid');
+      expect(conv).toBeDefined();
+      expect(conv?.currentState).toBe('COLLECTING_COLOR');
+      expect(conv?.sessionData?.originalFilename).toBe('AI_UN-06_.pdf');
+      expect(conv?.sessionData?.pageCount).toBe(35);
+
+      // Verify no error message was sent
+      const outboxItems = Array.from((repo as any).outbox.values()) as any[];
+      const errItem = outboxItems.find((o) => (o.payload?.idempotencyKey || '').startsWith('media_err_'));
+      expect(errItem).toBeUndefined();
+
+      // Verify ack and button prompt were sent
+      expect(customProvider.sendText).toHaveBeenCalled();
+      expect(customProvider.sendInteractiveButtons).toHaveBeenCalled();
+      const promptCall = customProvider.sendInteractiveButtons.mock.calls[0];
+      expect(promptCall[1]).toContain('35 pages');
+    });
+
+    it('does NOT treat plain filenames (document.pdf, photo.jpg, AI(UN-05).pdf) as inline base64', async () => {
+      const pdfDoc = await PDFDocument.create();
+      pdfDoc.addPage([595, 842]);
+      const pdfBuffer = Buffer.from(await pdfDoc.save());
+
+      const filenames = ['document.pdf', 'photo.jpg', 'AI(UN-05).pdf'];
+
+      for (let i = 0; i < filenames.length; i++) {
+        const fname = filenames[i];
+        const msgId = `msg_filename_safety_${i}`;
+        let streamCalled = false;
+
+        const mockP = {
+          sendText: vi.fn().mockResolvedValue({ providerMessageId: 'm1' }),
+          sendInteractiveButtons: vi.fn().mockResolvedValue({ providerMessageId: 'm2' }),
+          sendDocument: vi.fn().mockResolvedValue({ providerMessageId: 'm3' }),
+          getMediaUrl: vi.fn().mockResolvedValue({
+            url: `http://mock/media/${fname}`,
+            mimeType: 'application/pdf',
+          }),
+          downloadMediaStream: vi.fn().mockImplementation(async () => {
+            streamCalled = true;
+            const { Readable } = await import('stream');
+            return { stream: Readable.from([pdfBuffer]), contentLength: pdfBuffer.length };
+          }),
+        };
+        setWhatsAppProvider(mockP as any);
+
+        const subRepo = new InMemoryPrintOSRepository();
+        await subRepo.enqueueInboxItem({
+          messageId: msgId,
+          senderPhone: `91987654321${i}`,
+          rawPayload: {
+            event: 'message',
+            sessionId: 'session-printos',
+            data: {
+              id: msgId,
+              from: `91987654321${i}@c.us`,
+              chatId: `91987654321${i}@c.us`,
+              type: 'document',
+              body: fname, // plain filename string
+              media: {
+                omitted: true,
+                filename: fname,
+                mimetype: 'application/pdf',
+              },
+            },
+          },
+        });
+
+        const engine = new WhatsAppWorkerEngine(subRepo);
+        await engine.runCycle(10, 120);
+
+        // Must invoke streaming download because body is just a filename
+        expect(streamCalled).toBe(true);
+        expect(mockP.downloadMediaStream).toHaveBeenCalled();
+      }
+    });
+
+    it('correctly treats data:application/pdf;base64,... as inline media without calling download stream', async () => {
+      const pdfDoc = await PDFDocument.create();
+      pdfDoc.addPage([595, 842]);
+      const pdfBytes = await pdfDoc.save();
+      const dataUrl = `data:application/pdf;base64,${Buffer.from(pdfBytes).toString('base64')}`;
+
+      const mockP = {
+        sendText: vi.fn().mockResolvedValue({ providerMessageId: 'm1' }),
+        sendInteractiveButtons: vi.fn().mockResolvedValue({ providerMessageId: 'm2' }),
+        sendDocument: vi.fn().mockResolvedValue({ providerMessageId: 'm3' }),
+        getMediaUrl: vi.fn(),
+        downloadMediaStream: vi.fn(),
+      };
+      setWhatsAppProvider(mockP as any);
+
+      const subRepo = new InMemoryPrintOSRepository();
+      await subRepo.enqueueInboxItem({
+        messageId: 'msg_inline_data_url',
+        senderPhone: '919876543200',
+        rawPayload: {
+          event: 'message',
+          sessionId: 'session-printos',
+          data: {
+            id: 'msg_inline_data_url',
+            from: '919876543200@c.us',
+            chatId: '919876543200@c.us',
+            type: 'document',
+            body: dataUrl,
+            filename: 'inline.pdf',
+            hasMedia: true,
+          },
+        },
+      });
+
+      const engine = new WhatsAppWorkerEngine(subRepo);
+      await engine.runCycle(10, 120);
+
+      // Download stream should NOT be called since valid data URL was provided inline
+      expect(mockP.downloadMediaStream).not.toHaveBeenCalled();
+
+      const conv = await subRepo.getConversation('919876543200');
+      expect(conv?.currentState).toBe('COLLECTING_COLOR');
+      expect(conv?.sessionData?.pageCount).toBe(1);
     });
   });
 });

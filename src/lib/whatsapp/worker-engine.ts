@@ -220,21 +220,50 @@ export class WhatsAppWorkerEngine {
 
       try {
         const provider = getWhatsAppProvider();
-        const inlineBase64 =
-          (rawPayload?.data as any)?.media?.data ||
-          (rawPayload?.data as any)?.mediaData?.data ||
-          (rawPayload?.data as any)?.body ||
-          (rawPayload?.media as any)?.data ||
-          (rawPayload?.mediaData as any)?.data ||
-          (rawPayload?.body as string) ||
-          (rawPayload?.inlineBase64 as string);
+
+        // Check if OpenWA or provider explicitly flags media as omitted (must download via stream)
+        const isMediaOmitted =
+          Boolean((rawPayload?.data as any)?.media?.omitted) ||
+          Boolean((rawPayload?.media as any)?.omitted);
+
+        let inlineBase64: string | undefined;
+
+        if (!isMediaOmitted) {
+          const candidate =
+            (rawPayload?.data as any)?.media?.data ||
+            (rawPayload?.data as any)?.mediaData?.data ||
+            (rawPayload?.data as any)?.body ||
+            (rawPayload?.media as any)?.data ||
+            (rawPayload?.mediaData as any)?.data ||
+            (rawPayload?.body as string) ||
+            (rawPayload?.inlineBase64 as string);
+
+          if (typeof candidate === 'string') {
+            const trimmed = candidate.trim();
+            // Only treat as inline media if it is a legitimate data URL, known base64 signature, or JSON payload
+            // A plain filename (e.g. "AI(UN-06).pdf", "document.pdf", "photo.jpg") must NEVER be treated as base64
+            const isDataUrl = trimmed.startsWith('data:');
+            const isBase64Media =
+              trimmed.startsWith('JVBERi') || // %PDF
+              trimmed.startsWith('/9j/') ||   // JPEG
+              trimmed.startsWith('iVBORw');   // PNG
+            const isJsonPayload =
+              trimmed.startsWith('{') &&
+              trimmed.endsWith('}') &&
+              (trimmed.includes('"data"') || trimmed.includes('"base64"'));
+
+            if (isDataUrl || isBase64Media || isJsonPayload) {
+              inlineBase64 = candidate;
+            }
+          }
+        }
 
         const ingested = await this.mediaDownloader.ingestMedia(
           provider,
           event.mediaId,
           event.filename,
           item.senderPhone,
-          typeof inlineBase64 === 'string' ? inlineBase64 : undefined,
+          inlineBase64,
           event.mimeType,
           messageId
         );
